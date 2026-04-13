@@ -1,0 +1,49 @@
+[package]
+name = "fuzz"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+# Required by cargo-fuzz — prevents this crate from being a workspace member
+[workspace]
+
+[[bin]]
+name = "fuzz_transaction_decoding"
+path = "fuzz_targets/fuzz_transaction_decoding.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fuzz_stateless_verification"
+path = "fuzz_targets/fuzz_stateless_verification.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fuzz_state_transition"
+path = "fuzz_targets/fuzz_state_transition.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fuzz_block_verification"
+path = "fuzz_targets/fuzz_block_verification.rs"
+test = false
+bench = false
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary     = { version = "1", features = ["derive"] }
+borsh         = "1"
+nssa          = { path = "../../logos-execution-zone/nssa" }
+nssa_core     = { path = "../../logos-execution-zone/nssa/core" }
+common        = { path = "../../logos-execution-zone/common" }
+fuzz_props    = { path = "../fuzz_props" }
+testnet_initial_state = { path = "../../logos-execution-zone/testnet_initial_state" }
+
+[profile.release]
+debug = true
+opt-level = 3

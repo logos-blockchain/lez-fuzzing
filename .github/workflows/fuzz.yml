@@ -1,0 +1,141 @@
+name: Fuzzing
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+  schedule:
+    # Nightly full run
+    - cron: "0 2 * * *"
+
+env:
+  RISC0_DEV_MODE: "1"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ── Smoke fuzz: 60 s per target ─────────────────────────────────────────────
+  smoke-fuzz:
+    name: Smoke fuzz (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - fuzz_transaction_decoding
+          - fuzz_stateless_verification
+          - fuzz_state_transition
+          - fuzz_block_verification
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout logos-execution-zone alongside lez-fuzzing
+        uses: actions/checkout@v4
+        with:
+          repository: logos-co/logos-execution-zone
+          path: ../logos-execution-zone
+
+      - name: Install Rust nightly (required by cargo-fuzz)
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: llvm-tools-preview
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: fuzz-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Build fuzz target
+        run: cargo fuzz build ${{ matrix.target }}
+
+      - name: Run smoke fuzz (60 s)
+        run: |
+          cargo fuzz run ${{ matrix.target }} \
+            -- -max_total_time=60 -jobs=2 -workers=2
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crash-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}/
+
+  # ── Corpus regression ────────────────────────────────────────────────────────
+  regression:
+    name: Corpus regression (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - fuzz_transaction_decoding
+          - fuzz_stateless_verification
+          - fuzz_state_transition
+          - fuzz_block_verification
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout logos-execution-zone alongside lez-fuzzing
+        uses: actions/checkout@v4
+        with:
+          repository: logos-co/logos-execution-zone
+          path: ../logos-execution-zone
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: llvm-tools-preview
+      - run: cargo install cargo-fuzz --locked
+      - name: Reproduce corpus
+        run: |
+          cargo fuzz run ${{ matrix.target }} \
+            fuzz/corpus/${{ matrix.target }} -- -runs=0
+
+  # ── proptest property tests ──────────────────────────────────────────────────
+  proptest:
+    name: Property tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout logos-execution-zone alongside lez-fuzzing
+        uses: actions/checkout@v4
+        with:
+          repository: logos-co/logos-execution-zone
+          path: ../logos-execution-zone
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test -p fuzz_props --release
+
+  # ── Performance baseline (nightly only) ─────────────────────────────────────
+  perf-baseline:
+    name: Performance baseline
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout logos-execution-zone alongside lez-fuzzing
+        uses: actions/checkout@v4
+        with:
+          repository: logos-co/logos-execution-zone
+          path: ../logos-execution-zone
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: llvm-tools-preview
+      - run: cargo install cargo-fuzz --locked
+      - name: Measure throughput (30 s per target)
+        run: |
+          for target in \
+            fuzz_transaction_decoding \
+            fuzz_stateless_verification \
+            fuzz_state_transition \
+            fuzz_block_verification; do
+            echo "=== $target ===" | tee -a perf_baseline.txt
+            cargo fuzz run "$target" -- -max_total_time=30 2>&1 \
+              | grep -E "exec/s|execs_per_sec" | tail -1 | tee -a perf_baseline.txt
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: perf-baseline
+          path: perf_baseline.txt

@@ -1,0 +1,85 @@
+[workspace]
+resolver = "2"
+members = [
+    "fuzz_props",
+]
+
+# ── Workspace package metadata (mirrored from LEZ to satisfy workspace inheritance) ──
+[workspace.package]
+license = "MIT or Apache-2.0"
+
+# ── Workspace lints (mirrored exactly from logos-execution-zone to ensure LEZ crates
+#    compile with the same lint configuration they were written for) ────────────────
+[workspace.lints]
+clippy.all           = { level = "deny",  priority = -1 }
+clippy.pedantic      = { level = "deny",  priority = -1 }
+clippy.restriction   = { level = "deny",  priority = -1 }
+
+# -- pedantic allows ---
+clippy.missing-errors-doc   = "allow"
+clippy.missing-panics-doc   = "allow"
+clippy.similar-names        = "allow"
+clippy.too-many-lines       = "allow"
+clippy.implicit-hasher      = "allow"
+
+# -- restriction allows ---
+clippy.blanket-clippy-restriction-lints = "allow"
+clippy.unwrap-used          = "allow"
+clippy.expect-used          = "allow"
+clippy.unreachable          = "allow"
+clippy.single-call-fn       = "allow"
+clippy.panic                = "allow"
+clippy.shadow-reuse         = "allow"
+clippy.implicit-return      = "allow"
+clippy.std-instead-of-core  = "allow"
+clippy.std-instead-of-alloc = "allow"
+clippy.missing-trait-methods         = "allow"
+clippy.pattern-type-mismatch         = "allow"
+clippy.assertions-on-result-states   = "allow"
+clippy.missing-assert-message        = "allow"
+clippy.missing-docs-in-private-items = "allow"
+clippy.separated_literal_suffix      = "allow"
+clippy.absolute-paths                = "allow"
+clippy.min-ident-chars               = "allow"
+clippy.indexing-slicing              = "allow"
+clippy.little-endian-bytes           = "allow"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+# ── Workspace dependencies ────────────────────────────────────────────────────
+[workspace.dependencies]
+
+# ── LEZ crates — expects logos-execution-zone/ to be cloned at ../logos-execution-zone ──
+nssa                  = { path = "../logos-execution-zone/nssa" }
+nssa_core             = { path = "../logos-execution-zone/nssa/core" }
+common                = { path = "../logos-execution-zone/common" }
+key_protocol          = { path = "../logos-execution-zone/key_protocol" }
+testnet_initial_state = { path = "../logos-execution-zone/testnet_initial_state" }
+token_core            = { path = "../logos-execution-zone/programs/token/core" }
+test_program_methods  = { path = "../logos-execution-zone/test_program_methods" }
+
+# ── Third-party dependencies (versions mirrored from logos-execution-zone) ────
+anyhow       = "1.0.98"
+thiserror    = "2.0"
+serde        = { version = "1.0.60", default-features = false, features = ["derive"] }
+serde_json   = "1.0.81"
+serde_with   = "3.16.1"
+base64       = "0.22.1"
+sha2         = "0.10.8"
+log          = "0.4.28"
+hex          = "0.4.3"
+borsh        = "1.5.7"
+rand         = { version = "0.8.5", features = ["std", "std_rng", "getrandom"] }
+risc0-zkvm   = { version = "3.0.5", features = ["std"] }
+k256         = { version = "0.13.3", features = ["ecdsa-core", "arithmetic", "expose-field", "serde", "pem"] }
+bytemuck     = "1.24.0"
+bytesize     = { version = "2.3.1", features = ["serde"] }
+base58       = "0.2.0"
+env_logger   = "0.11"
+aes-gcm      = "0.10.3"
+bip39        = "2.2.0"
+hmac-sha512  = "1.1.7"
+itertools    = "0.14.0"
+risc0-build  = "3.0.5"
+logos-blockchain-common-http-client = { git = "https://github.com/logos-blockchain/logos-blockchain.git" }
