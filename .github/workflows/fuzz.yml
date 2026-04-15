@@ -25,6 +25,11 @@ jobs:
           - fuzz_stateless_verification
           - fuzz_state_transition
           - fuzz_block_verification
+          - fuzz_encoding_roundtrip
+          - fuzz_signature_verification
+          - fuzz_replay_prevention
+          - fuzz_state_diff_computation
+          - fuzz_validate_execute_consistency
     steps:
       - uses: actions/checkout@v4
 
@@ -78,6 +83,11 @@ jobs:
           - fuzz_stateless_verification
           - fuzz_state_transition
           - fuzz_block_verification
+          - fuzz_encoding_roundtrip
+          - fuzz_signature_verification
+          - fuzz_replay_prevention
+          - fuzz_state_diff_computation
+          - fuzz_validate_execute_consistency
     steps:
       - uses: actions/checkout@v4
       - name: Checkout logos-execution-zone alongside lez-fuzzing
@@ -130,7 +140,12 @@ jobs:
             fuzz_transaction_decoding \
             fuzz_stateless_verification \
             fuzz_state_transition \
-            fuzz_block_verification; do
+            fuzz_block_verification \
+            fuzz_encoding_roundtrip \
+            fuzz_signature_verification \
+            fuzz_replay_prevention \
+            fuzz_state_diff_computation \
+            fuzz_validate_execute_consistency; do
             echo "=== $target ===" | tee -a perf_baseline.txt
             cargo fuzz run "$target" -- -max_total_time=30 2>&1 \
               | grep -E "exec/s|execs_per_sec" | tail -1 | tee -a perf_baseline.txt

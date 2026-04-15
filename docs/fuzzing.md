@@ -72,25 +72,78 @@ just fuzz-regression
 
 ## How to Add a New Fuzz Target
 
-1. Create `fuzz/fuzz_targets/fuzz_<name>.rs` using the template below.
-2. Add a `[[bin]]` entry to `fuzz/Cargo.toml`.
-3. Create an empty seed corpus directory: `mkdir -p fuzz/corpus/fuzz_<name>`.
-4. Add the target to the CI matrix in `.github/workflows/fuzz.yml`.
-5. Run `RISC0_DEV_MODE=1 cargo fuzz build fuzz_<name>` to verify it compiles.
+### Step 1 — Scaffold with `just new-target`
 
-**Template:**
-
-```rust
-#![no_main]
-use libfuzzer_sys::fuzz_target;
-
-fuzz_target!(|data: &[u8]| {
-    // 1. Parse / decode `data` into your target type
-    // 2. Call the function under test
-    // 3. Assert invariants using `fuzz_props::invariants::assert_invariants()`
-    // 4. Never panic on invalid input; only panic on invariant violations
-});
+```bash
+just new-target my_feature
 ```
+
+This single command does four things automatically:
+
+| What | Where |
+|---|---|
+| Creates the corpus directory | `fuzz/corpus/fuzz_my_feature/` |
+| Writes a typed fuzz target template | `fuzz/fuzz_targets/fuzz_my_feature.rs` |
+| Appends `[[bin]]` entry | `fuzz/Cargo.toml` |
+| Inserts target into every CI matrix + perf loop | `.github/workflows/fuzz.yml` |
+
+The generated template uses `ArbNSSATransaction` from `fuzz_props::arbitrary_types`
+so libfuzzer drives every field of `NSSATransaction` independently — no manual
+`Unstructured` wiring required.
+
+### Step 2 — Implement the target
+
+Edit `fuzz/fuzz_targets/fuzz_my_feature.rs`.  Replace the placeholder with the
+function under test and any invariant assertions.  Use the typed wrappers from
+[`fuzz_props::arbitrary_types`](../fuzz_props/src/arbitrary_types.rs) for
+structured input, or the proptest generators from
+[`fuzz_props::generators`](../fuzz_props/src/generators.rs) for richer strategies.
+
+### Step 3 — Register the binary (automated)
+
+`just new-target` calls [`scripts/add_fuzz_target.py`](../scripts/add_fuzz_target.py)
+which appends the `[[bin]]` entry to [`fuzz/Cargo.toml`](../fuzz/Cargo.toml)
+automatically. Once present, `cargo fuzz list` (and therefore `just fuzz`,
+`just fuzz-regression`, `just corpus-cmin`) pick up the target automatically — no
+further Justfile edits required.
+
+> **Manual fallback:** if you create a target without `just new-target`, add the
+> entry yourself:
+>
+> ```toml
+> [[bin]]
+> name = "fuzz_my_feature"
+> path = "fuzz_targets/fuzz_my_feature.rs"
+> test = false
+> bench = false
+> ```
+
+### Step 4 — Add to CI matrix (automated)
+
+`just new-target` also inserts `fuzz_my_feature` into every strategy matrix and the
+perf-baseline shell loop in [`.github/workflows/fuzz.yml`](../.github/workflows/fuzz.yml)
+automatically via `scripts/add_fuzz_target.py`.
+
+> **Manual fallback:** if you created the target without `just new-target`, add
+> `- fuzz_my_feature` to the `target:` list in the three places shown in
+> `.github/workflows/fuzz.yml` (smoke-fuzz, regression, perf-baseline).
+
+### Step 5 — Verify
+
+```bash
+RISC0_DEV_MODE=1 cargo fuzz build fuzz_my_feature
+just fuzz-regression   # runs the new target against its (empty) corpus
+```
+
+### Quick reference: what to touch
+
+| File | Action | Automated? |
+|---|---|---|
+| `fuzz/fuzz_targets/fuzz_<name>.rs` | Create | ✅ `just new-target` |
+| `fuzz/corpus/fuzz_<name>/` | Create | ✅ `just new-target` |
+| `fuzz/Cargo.toml` | Add `[[bin]]` | ✅ `just new-target` |
+| `Justfile` | Nothing — auto-discovers | ✅ automatic |
+| `.github/workflows/fuzz.yml` | Add to 3 matrix lists | ✅ `just new-target` |
 
 ---
 

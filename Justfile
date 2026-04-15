@@ -1,19 +1,30 @@
 # ── Fuzzing ───────────────────────────────────────────────────────────────────
 export RISC0_DEV_MODE := "1"
 
-# Run all fuzz targets for TIME seconds each (default: 30)
-fuzz TIME="30":
-    cargo fuzz run fuzz_transaction_decoding  -- -max_total_time={{TIME}}
-    cargo fuzz run fuzz_stateless_verification -- -max_total_time={{TIME}}
-    cargo fuzz run fuzz_state_transition      -- -max_total_time={{TIME}}
-    cargo fuzz run fuzz_block_verification    -- -max_total_time={{TIME}}
+# List all registered fuzz targets (reads fuzz/Cargo.toml via cargo-fuzz)
+list-targets:
+    cargo fuzz list
 
-# Re-run the saved corpus (regression mode, no new mutations)
+# Run all fuzz targets for TIME seconds each (default: 30).
+# Targets are discovered automatically from fuzz/Cargo.toml — no edit needed here
+# when a new [[bin]] entry is added.
+fuzz TIME="30":
+    #!/bin/bash
+    set -euo pipefail
+    for target in $(cargo fuzz list 2>/dev/null); do
+        echo "=== fuzzing $target for {{TIME}}s ==="
+        cargo fuzz run "$target" -- -max_total_time={{TIME}}
+    done
+
+# Re-run the saved corpus for every target (regression mode, no new mutations)
 fuzz-regression:
-    cargo fuzz run fuzz_transaction_decoding  fuzz/corpus/fuzz_transaction_decoding  -- -runs=0
-    cargo fuzz run fuzz_stateless_verification fuzz/corpus/fuzz_stateless_verification -- -runs=0
-    cargo fuzz run fuzz_state_transition      fuzz/corpus/fuzz_state_transition      -- -runs=0
-    cargo fuzz run fuzz_block_verification    fuzz/corpus/fuzz_block_verification    -- -runs=0
+    #!/bin/bash
+    set -euo pipefail
+    for target in $(cargo fuzz list 2>/dev/null); do
+        echo "=== regression $target ==="
+        mkdir -p "fuzz/corpus/$target"
+        cargo fuzz run "$target" "fuzz/corpus/$target" -- -runs=0
+    done
 
 # Minimise a crash artifact
 # Usage: just fuzz-tmin fuzz_state_transition fuzz/artifacts/fuzz_state_transition/crash-XXX
@@ -30,17 +41,57 @@ update-lez:
 
 # ── Corpus management ─────────────────────────────────────────────────────────
 
-# Minimise the corpus for all four targets (removes dominated inputs)
+# Minimise the corpus for all targets (removes dominated inputs)
 corpus-cmin:
-    cargo fuzz cmin fuzz_transaction_decoding
-    cargo fuzz cmin fuzz_stateless_verification
-    cargo fuzz cmin fuzz_state_transition
-    cargo fuzz cmin fuzz_block_verification
+    #!/bin/bash
+    set -euo pipefail
+    for target in $(cargo fuzz list 2>/dev/null); do
+        echo "=== cmin $target ==="
+        cargo fuzz cmin "$target"
+    done
 
 # Minimise the corpus for a single target
 # Usage: just corpus-cmin-target fuzz_state_transition
 corpus-cmin-target TARGET:
     cargo fuzz cmin {{TARGET}}
+
+# ── Adding a new target ───────────────────────────────────────────────────────
+
+# Scaffold a new fuzz target — fully automated, no manual edits required.
+#
+# Steps performed automatically:
+#   1. Creates fuzz/corpus/<TARGET>/
+#   2. Copies fuzz/fuzz_targets/_template.rs → fuzz/fuzz_targets/<TARGET>.rs
+#   3. Appends the [[bin]] entry to fuzz/Cargo.toml
+#   4. Inserts <TARGET> into every strategy matrix in .github/workflows/fuzz.yml
+#
+# Usage: just new-target my_feature
+# (the "fuzz_" prefix is added automatically)
+new-target NAME:
+    #!/bin/bash
+    set -euo pipefail
+    TARGET="fuzz_{{NAME}}"
+    TEMPLATE="fuzz/fuzz_targets/_template.rs"
+    RS_FILE="fuzz/fuzz_targets/${TARGET}.rs"
+    CORPUS_DIR="fuzz/corpus/${TARGET}"
+
+    # ── 1. Create corpus directory ────────────────────────────────────────────
+    mkdir -p "$CORPUS_DIR"
+    echo "[1/4] Created corpus directory: $CORPUS_DIR"
+
+    # ── 2. Copy the typed fuzz target template ────────────────────────────────
+    if [ -f "$RS_FILE" ]; then
+        echo "SKIP [2/4]: $RS_FILE already exists — not overwriting."
+    else
+        cp "$TEMPLATE" "$RS_FILE"
+        echo "[2/4] Created target from template: $RS_FILE"
+    fi
+
+    # ── 3 & 4. Update Cargo.toml and fuzz.yml automatically ──────────────────
+    python3 scripts/add_fuzz_target.py "$TARGET"
+    echo ""
+    echo "Done!  Verify the build with:"
+    echo "  RISC0_DEV_MODE=1 cargo fuzz build ${TARGET}"
 
 # ── Housekeeping ──────────────────────────────────────────────────────────────
 

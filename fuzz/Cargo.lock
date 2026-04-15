@@ -1754,6 +1754,7 @@ dependencies = [
  "borsh",
  "common",
  "nssa",
+ "nssa_core",
  "proptest",
  "testnet_initial_state",
 ]

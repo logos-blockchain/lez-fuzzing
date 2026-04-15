@@ -2,6 +2,7 @@
 
 #![allow(clippy::missing_docs_in_private_items)]
 
+pub mod arbitrary_types;
 pub mod generators;
 pub mod invariants;
 

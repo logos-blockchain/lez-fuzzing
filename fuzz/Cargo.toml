@@ -47,3 +47,33 @@ testnet_initial_state = { path = "../../logos-execution-zone/testnet_initial_sta
 [profile.release]
 debug = true
 opt-level = 3
+
+[[bin]]
+name = "fuzz_encoding_roundtrip"
+path = "fuzz_targets/fuzz_encoding_roundtrip.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fuzz_signature_verification"
+path = "fuzz_targets/fuzz_signature_verification.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fuzz_replay_prevention"
+path = "fuzz_targets/fuzz_replay_prevention.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fuzz_state_diff_computation"
+path = "fuzz_targets/fuzz_state_diff_computation.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fuzz_validate_execute_consistency"
+path = "fuzz_targets/fuzz_validate_execute_consistency.rs"
+test = false
+bench = false
