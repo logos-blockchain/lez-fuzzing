@@ -67,7 +67,9 @@ pub struct ArbSignature(pub Signature);
 
 impl<'a> Arbitrary<'a> for ArbSignature {
     fn arbitrary(u: &mut Unstructured<'a>) -> ArbResult<Self> {
-        Ok(Self(Signature { value: <[u8; 64]>::arbitrary(u)? }))
+        Ok(Self(Signature {
+            value: <[u8; 64]>::arbitrary(u)?,
+        }))
     }
 }
 
@@ -115,8 +117,15 @@ impl<'a> Arbitrary<'a> for ArbPublicKey {
             // The ArbSignature type (random bytes) already exercises the full
             // rejection path in `is_valid_for` independently.
             let bytes = <[u8; 32]>::arbitrary(u)?;
-            let pk = PublicKey::try_new(bytes)
-                .unwrap_or_else(|_| PublicKey::new_from_private_key(&ArbPrivateKey::arbitrary(u).map(|w| w.0).unwrap_or_else(|_| PrivateKey::try_new([1_u8; 32]).expect("known-good seed"))));
+            let pk = PublicKey::try_new(bytes).unwrap_or_else(|_| {
+                PublicKey::new_from_private_key(
+                    &ArbPrivateKey::arbitrary(u)
+                        .map(|w| w.0)
+                        .unwrap_or_else(|_| {
+                            PrivateKey::try_new([1_u8; 32]).expect("known-good seed")
+                        }),
+                )
+            });
             Ok(Self(pk))
         }
     }
@@ -166,12 +175,7 @@ impl<'a> Arbitrary<'a> for ArbWitnessSet {
         // 0–3 (signature, public_key) pairs
         let n = (u8::arbitrary(u)? as usize) % 4;
         let pairs = (0..n)
-            .map(|_| {
-                Ok((
-                    ArbSignature::arbitrary(u)?.0,
-                    ArbPublicKey::arbitrary(u)?.0,
-                ))
-            })
+            .map(|_| Ok((ArbSignature::arbitrary(u)?.0, ArbPublicKey::arbitrary(u)?.0)))
             .collect::<ArbResult<Vec<_>>>()?;
         Ok(Self(WitnessSet::from_raw_parts(pairs)))
     }
