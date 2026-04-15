@@ -17,7 +17,7 @@ fuzz_target!(|data: &[u8]| {
         .collect();
 
     // Construct the initial state
-    let mut state = V03State::new_with_genesis_accounts(&init_accs, &[]);
+    let mut state = V03State::new_with_genesis_accounts(&init_accs, vec![], 0);
 
     // Generate up to 8 transactions and apply them
     let n_txs: u8 = u8::arbitrary(&mut u).unwrap_or(0) % 8;
