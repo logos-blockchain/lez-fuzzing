@@ -12,8 +12,7 @@ pub fn arbitrary_transaction(u: &mut Unstructured<'_>) -> arbitrary::Result<NSSA
     // Prefer structured generation; raw decode as fallback
     if bool::arbitrary(u)? {
         let raw = Vec::<u8>::arbitrary(u)?;
-        borsh::from_slice::<NSSATransaction>(&raw)
-            .map_err(|_| arbitrary::Error::IncorrectFormat)
+        borsh::from_slice::<NSSATransaction>(&raw).map_err(|_| arbitrary::Error::IncorrectFormat)
     } else {
         // Generate a minimal empty public tx using known test keys
         let signing_key = PrivateKey::try_new([u8::arbitrary(u)?; 32])
@@ -27,9 +26,9 @@ pub fn arbitrary_transaction(u: &mut Unstructured<'_>) -> arbitrary::Result<NSSA
         )
         .map_err(|_| arbitrary::Error::IncorrectFormat)?;
         let witness = nssa::public_transaction::WitnessSet::for_message(&message, &[&signing_key]);
-        Ok(NSSATransaction::Public(
-            nssa::PublicTransaction::new(message, witness),
-        ))
+        Ok(NSSATransaction::Public(nssa::PublicTransaction::new(
+            message, witness,
+        )))
     }
 }
 
@@ -78,10 +77,10 @@ pub fn arb_hashable_block_data() -> impl Strategy<Value = HashableBlockData> {
     let accounts = test_accounts();
     proptest::collection::vec(arb_native_transfer_tx(accounts), 0..8).prop_map(|txs| {
         HashableBlockData {
-            block_id:        1,
+            block_id: 1,
             prev_block_hash: common::HashType([0; 32]),
-            timestamp:       0,
-            transactions:    txs,
+            timestamp: 0,
+            transactions: txs,
         }
     })
 }
@@ -121,18 +120,16 @@ prop_compose! {
 /// fuzz target.
 pub fn arb_duplicate_tx_sequence() -> impl Strategy<Value = Vec<NSSATransaction>> {
     let accounts = test_accounts();
-    proptest::collection::vec(arb_native_transfer_tx(accounts), 1..5_usize).prop_flat_map(
-        |txs| {
-            // Build a sequence that: original | duplicates | reversed
-            let duped: Vec<NSSATransaction> = txs
-                .iter()
-                .cloned()
-                .chain(txs.iter().cloned()) // append exact duplicates
-                .chain(txs.iter().rev().cloned()) // append reversed order
-                .collect();
-            Just(duped)
-        },
-    )
+    proptest::collection::vec(arb_native_transfer_tx(accounts), 1..5_usize).prop_flat_map(|txs| {
+        // Build a sequence that: original | duplicates | reversed
+        let duped: Vec<NSSATransaction> = txs
+            .iter()
+            .cloned()
+            .chain(txs.iter().cloned()) // append exact duplicates
+            .chain(txs.iter().rev().cloned()) // append reversed order
+            .collect();
+        Just(duped)
+    })
 }
 
 // ── IS-5: Pathological sequences intended to violate protocol rules ───────────
@@ -145,21 +142,19 @@ pub fn arb_duplicate_tx_sequence() -> impl Strategy<Value = Vec<NSSATransaction>
 pub fn arb_pathological_sequence() -> impl Strategy<Value = Vec<NSSATransaction>> {
     let accounts = test_accounts();
     let n = accounts.len();
-    proptest::collection::vec(
-        (0..n, 0..n, 0u128..5u128, any::<bool>()),
-        1..8_usize,
+    proptest::collection::vec((0..n, 0..n, 0u128..5u128, any::<bool>()), 1..8_usize).prop_map(
+        move |params| {
+            params
+                .into_iter()
+                .map(|(from_idx, to_idx, nonce, zero_amount)| {
+                    let (from_id, from_key) = &accounts[from_idx];
+                    let (to_id, _) = &accounts[to_idx];
+                    let amount = if zero_amount { 0u128 } else { u128::MAX }; // 0 or overflow
+                    common::test_utils::create_transaction_native_token_transfer(
+                        *from_id, nonce, *to_id, amount, from_key,
+                    )
+                })
+                .collect()
+        },
     )
-    .prop_map(move |params| {
-        params
-            .into_iter()
-            .map(|(from_idx, to_idx, nonce, zero_amount)| {
-                let (from_id, from_key) = &accounts[from_idx];
-                let (to_id, _) = &accounts[to_idx];
-                let amount = if zero_amount { 0u128 } else { u128::MAX }; // 0 or overflow
-                common::test_utils::create_transaction_native_token_transfer(
-                    *from_id, nonce, *to_id, amount, from_key,
-                )
-            })
-            .collect()
-    })
 }

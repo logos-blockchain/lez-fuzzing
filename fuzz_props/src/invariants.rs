@@ -14,17 +14,17 @@ impl BalanceSnapshot {
 
 /// Shared context threaded through every invariant check.
 pub struct InvariantCtx<'a> {
-    pub state_before:    &'a V03State,
-    pub state_after:     &'a V03State,
-    pub tx:              &'a NSSATransaction,
-    pub result:          &'a Result<(), NssaError>,
+    pub state_before: &'a V03State,
+    pub state_after: &'a V03State,
+    pub tx: &'a NSSATransaction,
+    pub result: &'a Result<(), NssaError>,
     pub balances_before: BalanceSnapshot,
 }
 
 #[derive(Debug)]
 pub struct InvariantViolation {
     pub invariant: &'static str,
-    pub message:   String,
+    pub message: String,
 }
 
 pub trait ProtocolInvariant {
@@ -70,10 +70,7 @@ impl ProtocolInvariant for ReplayRejection {
 
 /// Run every registered invariant and panic with a structured message on first violation.
 pub fn assert_invariants(ctx: &InvariantCtx<'_>) {
-    let invariants: &[&dyn ProtocolInvariant] = &[
-        &StateIsolationOnFailure,
-        &ReplayRejection,
-    ];
+    let invariants: &[&dyn ProtocolInvariant] = &[&StateIsolationOnFailure, &ReplayRejection];
     for inv in invariants {
         if let Some(violation) = inv.check(ctx) {
             panic!(
@@ -91,7 +88,8 @@ mod tests {
     use nssa::V03State;
 
     fn make_empty_state() -> V03State {
-        V03State::new_with_genesis_accounts(&[], &[])
+        //V03State::new_with_genesis_accounts(&[], &[])
+        V03State::new_with_genesis_accounts(&[], vec![], 0)
     }
 
     fn make_empty_snapshot() -> BalanceSnapshot {
@@ -104,10 +102,10 @@ mod tests {
         let tx = common::test_utils::produce_dummy_empty_transaction();
         let result: Result<(), NssaError> = Err(NssaError::InvalidInput("test".to_owned()));
         let ctx = InvariantCtx {
-            state_before:    &state,
-            state_after:     &state,
-            tx:              &tx,
-            result:          &result,
+            state_before: &state,
+            state_after: &state,
+            tx: &tx,
+            result: &result,
             balances_before: make_empty_snapshot(),
         };
         // Should not panic — invariant check is a placeholder
@@ -120,10 +118,10 @@ mod tests {
         let tx = common::test_utils::produce_dummy_empty_transaction();
         let result: Result<(), NssaError> = Ok(());
         let ctx = InvariantCtx {
-            state_before:    &state,
-            state_after:     &state,
-            tx:              &tx,
-            result:          &result,
+            state_before: &state,
+            state_after: &state,
+            tx: &tx,
+            result: &result,
             balances_before: make_empty_snapshot(),
         };
         assert_invariants(&ctx);
