@@ -13,19 +13,28 @@ lez-fuzzing/
 ├── Justfile                # Turn-key entry-points
 ├── rust-toolchain.toml     # Pins Rust nightly (required by cargo-fuzz)
 ├── .gitignore
+├── scripts/
+│   └── add_fuzz_target.py  # Automates new-target scaffolding (called by just new-target)
 ├── fuzz_props/             # Shared invariant framework + input generators
 │   ├── Cargo.toml
 │   └── src/
 │       ├── lib.rs
-│       ├── invariants.rs   # ProtocolInvariant trait + concrete invariants
-│       └── generators.rs   # Arbitrary / proptest strategies
+│       ├── arbitrary_types.rs  # Arbitrary impl wrappers for LEZ types (libFuzzer)
+│       ├── invariants.rs       # ProtocolInvariant trait + concrete invariants
+│       └── generators.rs       # Arbitrary / proptest strategies
 ├── fuzz/                   # cargo-fuzz crate (own [workspace] sentinel)
 │   ├── Cargo.toml
 │   ├── fuzz_targets/
+│   │   ├── _template.rs                        # Template for just new-target
 │   │   ├── fuzz_transaction_decoding.rs
 │   │   ├── fuzz_stateless_verification.rs
 │   │   ├── fuzz_state_transition.rs
-│   │   └── fuzz_block_verification.rs
+│   │   ├── fuzz_block_verification.rs
+│   │   ├── fuzz_encoding_roundtrip.rs
+│   │   ├── fuzz_signature_verification.rs
+│   │   ├── fuzz_replay_prevention.rs
+│   │   ├── fuzz_state_diff_computation.rs
+│   │   └── fuzz_validate_execute_consistency.rs
 │   └── corpus/             # Curated seed inputs (one dir per target)
 ├── .github/
 │   └── workflows/
@@ -106,6 +115,11 @@ just fuzz-props
 | `fuzz_stateless_verification` | `transaction_stateless_check()` idempotency | `fuzz/fuzz_targets/fuzz_stateless_verification.rs` |
 | `fuzz_state_transition` | `V03State` transition + state-isolation invariant | `fuzz/fuzz_targets/fuzz_state_transition.rs` |
 | `fuzz_block_verification` | Block hash integrity | `fuzz/fuzz_targets/fuzz_block_verification.rs` |
+| `fuzz_encoding_roundtrip` | Borsh encode→decode→encode round-trip identity | `fuzz/fuzz_targets/fuzz_encoding_roundtrip.rs` |
+| `fuzz_signature_verification` | Signature creation + verification correctness and no-panic | `fuzz/fuzz_targets/fuzz_signature_verification.rs` |
+| `fuzz_replay_prevention` | Transaction nonce replay rejection | `fuzz/fuzz_targets/fuzz_replay_prevention.rs` |
+| `fuzz_state_diff_computation` | `ValidatedStateDiff` scope isolation (only declared accounts mutated) | `fuzz/fuzz_targets/fuzz_state_diff_computation.rs` |
+| `fuzz_validate_execute_consistency` | `validate_on_state` / `execute_check_on_state` agreement + diff accuracy | `fuzz/fuzz_targets/fuzz_validate_execute_consistency.rs` |
 
 ---
 
@@ -137,6 +151,19 @@ cp fuzz/artifacts/fuzz_state_transition/crash-abc123-minimised \
 
 ---
 
+## Adding a New Target
+
+```bash
+# Scaffold everything automatically (corpus dir, .rs file, Cargo.toml entry, CI matrix entry)
+just new-target my_feature   # creates fuzz_my_feature
+```
+
+`just new-target` calls [`scripts/add_fuzz_target.py`](scripts/add_fuzz_target.py) which
+appends the `[[bin]]` entry to [`fuzz/Cargo.toml`](fuzz/Cargo.toml) and inserts the target
+into every strategy matrix in [`.github/workflows/fuzz.yml`](.github/workflows/fuzz.yml).
+
+---
+
 ## Housekeeping
 
 ```bash
@@ -154,8 +181,8 @@ GitHub Actions runs four jobs on every push/PR and nightly:
 
 | Job | What it does |
 |-----|-------------|
-| `smoke-fuzz` (matrix) | Builds + runs each target for 60 s |
-| `regression` (matrix) | Replays the saved corpus (`-runs=0`) |
+| `smoke-fuzz` (matrix, 9 targets) | Builds + runs each target for 60 s |
+| `regression` (matrix, 9 targets) | Replays the saved corpus (`-runs=0`) |
 | `proptest` | `cargo test -p fuzz_props --release` |
 | `perf-baseline` (nightly only) | Measures exec/sec per target, uploads `perf_baseline.txt` |
 

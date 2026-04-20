@@ -63,10 +63,15 @@ just fuzz-regression
 
 | Target | What it fuzzes | Entry point |
 |--------|---------------|-------------|
-| `fuzz_transaction_decoding` | borsh decoding of all transaction and block types | `fuzz/fuzz_targets/fuzz_transaction_decoding.rs` |
+| `fuzz_transaction_decoding` | Borsh decoding of all transaction and block types | `fuzz/fuzz_targets/fuzz_transaction_decoding.rs` |
 | `fuzz_stateless_verification` | `transaction_stateless_check()` signature validation | `fuzz/fuzz_targets/fuzz_stateless_verification.rs` |
 | `fuzz_state_transition` | `V03State::transition_from_*()` with invariant checks | `fuzz/fuzz_targets/fuzz_state_transition.rs` |
 | `fuzz_block_verification` | Block hash integrity + replayer pipeline | `fuzz/fuzz_targets/fuzz_block_verification.rs` |
+| `fuzz_encoding_roundtrip` | `decode(encode(tx)) == Ok(tx)` and `encode(decode(encode(tx))) == encode(tx)` for `PublicTransaction` and `ProgramDeploymentTransaction` | `fuzz/fuzz_targets/fuzz_encoding_roundtrip.rs` |
+| `fuzz_signature_verification` | Signature correctness (sign→verify), no-panic on random bytes, cross-key soundness | `fuzz/fuzz_targets/fuzz_signature_verification.rs` |
+| `fuzz_replay_prevention` | A tx accepted in block N must be rejected when replayed in block N+1 (nonce consumed) | `fuzz/fuzz_targets/fuzz_replay_prevention.rs` |
+| `fuzz_state_diff_computation` | `ValidatedStateDiff` only modifies accounts declared in `affected_public_account_ids()` | `fuzz/fuzz_targets/fuzz_state_diff_computation.rs` |
+| `fuzz_validate_execute_consistency` | `validate_on_state` and `execute_check_on_state` must agree on success/failure and produce identical state changes | `fuzz/fuzz_targets/fuzz_validate_execute_consistency.rs` |
 
 ---
 
@@ -205,11 +210,44 @@ Open a PR. The `regression` CI job will permanently block re-introduction of thi
 Shared invariants live in `fuzz_props/src/invariants.rs`. Each invariant implements
 `ProtocolInvariant` and is automatically run by `assert_invariants()`.
 
+Concrete invariants currently registered:
+
+| Invariant | Description |
+|-----------|-------------|
+| `StateIsolationOnFailure` | Account balances must not change when a transaction is rejected |
+| `ReplayRejection` | An accepted transaction must be rejected when replayed (see `fuzz_replay_prevention`) |
+
 To add a new invariant:
 
 1. Add a zero-size struct implementing `ProtocolInvariant`.
 2. Register it in the `invariants` slice inside `assert_invariants()`.
 3. Write a `#[test]` in `fuzz_props` that triggers and detects a synthetic violation.
+
+---
+
+## Input Generators
+
+The `fuzz_props` crate provides two layers of input generation:
+
+### `fuzz_props::arbitrary_types` (libFuzzer / `Arbitrary`)
+
+Typed wrappers that implement `Arbitrary` for LEZ structs — `ArbNSSATransaction`,
+`ArbPublicTransaction`, `ArbProgramDeploymentTransaction`, `ArbPrivateKey`,
+`ArbPublicKey`, `ArbSignature`, etc.  Use these directly as fuzz target parameters
+for zero-boilerplate structured fuzzing.
+
+### `fuzz_props::generators` (proptest strategies + libFuzzer helpers)
+
+| Generator | Covers |
+|-----------|--------|
+| `arbitrary_transaction()` | Best-effort structured `NSSATransaction` from unstructured bytes, falls back to raw Borsh decode |
+| `arb_borsh_transaction_bytes()` | Raw Borsh bytes including invalid encodings (IS-2) |
+| `arb_native_transfer_tx()` | Valid native-transfer `NSSATransaction` between known genesis accounts |
+| `test_accounts()` | Returns `(AccountId, PrivateKey)` pairs from `testnet_initial_state` |
+| `arb_hashable_block_data()` | `HashableBlockData` with 0–8 valid native transfers |
+| `arb_invalid_account_state_tx()` | Phantom accounts + overflow amounts — expected to be rejected (IS-3) |
+| `arb_duplicate_tx_sequence()` | Duplicated + re-ordered transaction sequences (IS-4) |
+| `arb_pathological_sequence()` | Zero-value, self-transfer, max-nonce inputs (IS-5) |
 
 ---
 
@@ -223,6 +261,14 @@ Measured on a 4-core x86_64 Linux runner with `RISC0_DEV_MODE=1`:
 | `fuzz_stateless_verification` | ~30 000 exec/sec |
 | `fuzz_state_transition` | ~5 000 exec/sec |
 | `fuzz_block_verification` | ~50 000 exec/sec |
+| `fuzz_encoding_roundtrip` | ~150 000 exec/sec |
+| `fuzz_signature_verification` | ~20 000 exec/sec |
+| `fuzz_replay_prevention` | ~5 000 exec/sec |
+| `fuzz_state_diff_computation` | ~10 000 exec/sec |
+| `fuzz_validate_execute_consistency` | ~3 000 exec/sec |
+
+> Numbers for the five newer targets are rough estimates; run `just perf-baseline`
+> locally or check the `perf-baseline` CI artifact for up-to-date measurements.
 
 Recommended local settings for longer runs:
 
@@ -249,27 +295,13 @@ flag stubs out ZK proof generation and replaces it with a fast mock implementati
 
 ---
 
-## Input Generators
-
-The `fuzz_props` crate (`fuzz_props/src/generators.rs`) provides reusable input
-generators for both `libfuzzer` (via `arbitrary`) and `proptest`:
-
-| Generator | Covers |
-|-----------|--------|
-| `arbitrary_transaction()` | IS-2: malformed + boundary transactions |
-| `arb_borsh_transaction_bytes()` | IS-2: raw borsh bytes including invalid encodings |
-| `arb_invalid_account_state_tx()` | IS-3: phantom accounts + overflow amounts |
-| `arb_duplicate_tx_sequence()` | IS-4: duplicated + re-ordered transaction sequences |
-| `arb_pathological_sequence()` | IS-5: zero-value, self-transfer, max-nonce inputs |
-
----
-
 ## Known Limitations & Future Work
 
 | Item | Notes |
 |------|-------|
-| `PrivacyPreservingTransaction` coverage | Currently only exercised in decoding target; a dedicated slow target with `RISC0_DEV_MODE=1` and `proptest` should be added after the four MVP targets are stable |
-| `V03State` snapshot equality | If `V03State` does not implement `PartialEq`/`Clone`, implement or derive them in `lez/nssa/src/state.rs` behind a `cfg(any(test, feature = "fuzzing"))` guard |
+| `PrivacyPreservingTransaction` coverage | Excluded from `fuzz_encoding_roundtrip` because its ZK receipt cannot be reconstructed in a fuzzing loop. A dedicated slow target with `RISC0_DEV_MODE=1` and `proptest` should be added after the current targets are stable |
+| `StateIsolationOnFailure` balance check | The invariant body is a placeholder — full balance extraction from `V03State` should be implemented once the API for iterating all accounts is confirmed |
+| `fuzz_validate_execute_consistency` new-account detection | If `execute_check_on_state` creates a brand-new account absent from both the genesis set and the diff, that state-widening will not be detected until `V03State` exposes account iteration |
 | AFL++ integration | A `just fuzz-afl` recipe can be added later; the same corpus is compatible |
-| Differential testing (sequencer vs replayer) | Add a fifth target that feeds the same block to `SequencerCore` and `indexer_core` and asserts identical state roots |
-| LEZ version tracking | There is no submodule pin — `lez-fuzzing` reads `../logos-execution-zone` as checked out. Update that repo to a release tag or a tested commit, then run `just update-lez` (which does `git pull --ff-only`) and open a PR to bump it. |
+| Differential testing (sequencer vs replayer) | Add a target that feeds the same block to `SequencerCore` and `indexer_core` and asserts identical state roots |
+| LEZ version tracking | There is no submodule pin — `lez-fuzzing` reads `../logos-execution-zone` as checked out. Update that repo to a release tag or a tested commit, then run `just update-lez` (which does `git pull --ff-only`) and open a PR to bump it |
