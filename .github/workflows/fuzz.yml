@@ -56,8 +56,10 @@ jobs:
             target
           key: fuzz-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Create logos-blockchain-circuits placeholder (dev mode)
-        run: mkdir -p ~/.logos-blockchain-circuits
+      - name: Install logos-blockchain-circuits
+        uses: ./logos-execution-zone/.github/actions/install-logos-blockchain-circuits
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked
@@ -106,8 +108,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: llvm-tools-preview
-      - name: Create logos-blockchain-circuits placeholder (dev mode)
-        run: mkdir -p ~/.logos-blockchain-circuits
+      - name: Install logos-blockchain-circuits
+        uses: ./logos-execution-zone/.github/actions/install-logos-blockchain-circuits
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
       - run: cargo install cargo-fuzz --locked
       - name: Reproduce corpus
         run: |
@@ -128,8 +132,10 @@ jobs:
       - name: Symlink logos-execution-zone to sibling directory
         run: ln -s "$GITHUB_WORKSPACE/logos-execution-zone" "$GITHUB_WORKSPACE/../logos-execution-zone"
       - uses: dtolnay/rust-toolchain@stable
-      - name: Create logos-blockchain-circuits placeholder (dev mode)
-        run: mkdir -p ~/.logos-blockchain-circuits
+      - name: Install logos-blockchain-circuits
+        uses: ./logos-execution-zone/.github/actions/install-logos-blockchain-circuits
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
       - run: cargo test -p fuzz_props --release
 
   # ── Performance baseline (nightly only) ─────────────────────────────────────
@@ -149,8 +155,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: llvm-tools-preview
-      - name: Create logos-blockchain-circuits placeholder (dev mode)
-        run: mkdir -p ~/.logos-blockchain-circuits
+      - name: Install logos-blockchain-circuits
+        uses: ./logos-execution-zone/.github/actions/install-logos-blockchain-circuits
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
       - run: cargo install cargo-fuzz --locked
       - name: Measure throughput (30 s per target)
         run: |
