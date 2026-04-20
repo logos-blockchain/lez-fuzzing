@@ -37,7 +37,10 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: logos-co/logos-execution-zone
-          path: ../logos-execution-zone
+          path: logos-execution-zone
+
+      - name: Symlink logos-execution-zone to sibling directory
+        run: ln -s "$GITHUB_WORKSPACE/logos-execution-zone" "$GITHUB_WORKSPACE/../logos-execution-zone"
 
       - name: Install Rust nightly (required by cargo-fuzz)
         uses: dtolnay/rust-toolchain@nightly
@@ -94,7 +97,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: logos-co/logos-execution-zone
-          path: ../logos-execution-zone
+          path: logos-execution-zone
+      - name: Symlink logos-execution-zone to sibling directory
+        run: ln -s "$GITHUB_WORKSPACE/logos-execution-zone" "$GITHUB_WORKSPACE/../logos-execution-zone"
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: llvm-tools-preview
@@ -114,7 +119,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: logos-co/logos-execution-zone
-          path: ../logos-execution-zone
+          path: logos-execution-zone
+      - name: Symlink logos-execution-zone to sibling directory
+        run: ln -s "$GITHUB_WORKSPACE/logos-execution-zone" "$GITHUB_WORKSPACE/../logos-execution-zone"
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test -p fuzz_props --release
 
@@ -129,7 +136,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: logos-co/logos-execution-zone
-          path: ../logos-execution-zone
+          path: logos-execution-zone
+      - name: Symlink logos-execution-zone to sibling directory
+        run: ln -s "$GITHUB_WORKSPACE/logos-execution-zone" "$GITHUB_WORKSPACE/../logos-execution-zone"
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: llvm-tools-preview
