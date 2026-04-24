@@ -1,6 +1,8 @@
 use arbitrary::{Arbitrary, Unstructured};
 use common::{block::HashableBlockData, transaction::NSSATransaction};
 use nssa::{AccountId, PrivateKey};
+
+use crate::arbitrary_types::ArbNSSATransaction;
 use proptest::prelude::*;
 use testnet_initial_state::initial_pub_accounts_private_keys;
 
@@ -9,26 +11,15 @@ use testnet_initial_state::initial_pub_accounts_private_keys;
 /// A best-effort attempt to create a structurally plausible `NSSATransaction`
 /// from unstructured bytes. Falls back to raw borsh decoding.
 pub fn arbitrary_transaction(u: &mut Unstructured<'_>) -> arbitrary::Result<NSSATransaction> {
-    // Prefer structured generation; raw decode as fallback
+    // Prefer structured generation (via Arbitrary impls); raw borsh decode as fallback.
     if bool::arbitrary(u)? {
         let raw = Vec::<u8>::arbitrary(u)?;
         borsh::from_slice::<NSSATransaction>(&raw).map_err(|_| arbitrary::Error::IncorrectFormat)
     } else {
-        // Generate a minimal empty public tx using known test keys
-        let signing_key = PrivateKey::try_new([u8::arbitrary(u)?; 32])
-            .map_err(|_| arbitrary::Error::IncorrectFormat)?;
-        let program_id = nssa::program::Program::authenticated_transfer_program().id();
-        let message = nssa::public_transaction::Message::try_new(
-            program_id,
-            vec![],
-            vec![],
-            u128::arbitrary(u)?,
-        )
-        .map_err(|_| arbitrary::Error::IncorrectFormat)?;
-        let witness = nssa::public_transaction::WitnessSet::for_message(&message, &[&signing_key]);
-        Ok(NSSATransaction::Public(nssa::PublicTransaction::new(
-            message, witness,
-        )))
+        // Use the full ArbNSSATransaction generator, which produces both Public and
+        // ProgramDeployment variants with realistic account IDs, nonces, and witness sets —
+        // far richer than the previous degenerate single-byte key / empty-message path.
+        ArbNSSATransaction::arbitrary(u).map(|w| w.0)
     }
 }
 

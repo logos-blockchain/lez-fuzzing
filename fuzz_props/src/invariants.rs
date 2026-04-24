@@ -44,11 +44,18 @@ impl ProtocolInvariant for StateIsolationOnFailure {
 
     fn check(&self, ctx: &InvariantCtx<'_>) -> Option<InvariantViolation> {
         if ctx.result.is_err() {
-            // Capture snapshot totals for comparison
-            let _before_total = ctx.balances_before.total();
-            let _state_after = ctx.state_after;
-            // TODO: implement actual balance extraction from V03State once API is confirmed
-            // (use state_after.get_account_by_id per known account and compare with before)
+            for (acc_id, &expected_balance) in &ctx.balances_before.0 {
+                let actual_balance = ctx.state_after.get_account_by_id(*acc_id).balance;
+                if actual_balance != expected_balance {
+                    return Some(InvariantViolation {
+                        invariant: self.name(),
+                        message: format!(
+                            "balance changed despite tx rejection: account {:?} had {expected_balance} before, {actual_balance} after",
+                            acc_id,
+                        ),
+                    });
+                }
+            }
         }
         None
     }

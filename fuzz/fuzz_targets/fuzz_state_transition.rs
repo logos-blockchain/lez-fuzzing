@@ -21,7 +21,7 @@ fuzz_target!(|data: &[u8]| {
 
     // Generate up to 8 transactions and apply them
     let n_txs: u8 = u8::arbitrary(&mut u).unwrap_or(0) % 8;
-    for _ in 0..n_txs {
+    for i in 0..n_txs {
         let Ok(tx) = arbitrary_transaction(&mut u) else {
             break;
         };
@@ -34,8 +34,12 @@ fuzz_target!(|data: &[u8]| {
         // Clone state before to detect state leakage on failure
         let state_snapshot = state.clone();
 
-        let block_id: u64 = 1;
-        let timestamp: u64 = 0;
+        // Advance block_id and timestamp each iteration so the state machine
+        // sees a realistic monotonically-increasing context.  Using the same
+        // block_id=1 / timestamp=0 for every tx hides bugs that only manifest
+        // when the block context changes across a multi-transaction sequence.
+        let block_id: u64 = 1 + u64::from(i);
+        let timestamp: u64 = u64::from(i);
         let result = tx.execute_check_on_state(&mut state, block_id, timestamp);
 
         if result.is_err() {

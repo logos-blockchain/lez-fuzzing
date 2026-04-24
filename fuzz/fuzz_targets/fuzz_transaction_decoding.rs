@@ -13,7 +13,7 @@ fuzz_target!(|data: &[u8]| {
         let tx2 = borsh::from_slice::<NSSATransaction>(&re_encoded)
             .expect("second decode of re-encoded tx must succeed");
         assert_eq!(
-            borsh::to_vec(&tx).unwrap(),
+            re_encoded,
             borsh::to_vec(&tx2).unwrap(),
             "NSSATransaction roundtrip encoding divergence"
         );

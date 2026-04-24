@@ -18,12 +18,10 @@ fuzz_target!(|data: &[u8]| {
     let recomputed2 = hashable.block_hash();
     assert_eq!(recomputed, recomputed2, "block_hash() is not deterministic");
 
-    // Log divergence between stored and recomputed hash for coverage guidance.
-    // We do NOT assert equality because adversarially-crafted fuzz inputs can
-    // store an arbitrary hash field without matching the body content.
-    let stored_hash = block.header.hash;
-    if stored_hash == recomputed {
-        // Hashes match — this is the expected case for a valid sequencer-produced block
-        let _ = stored_hash;
-    }
+    // We intentionally do NOT assert that the stored header hash equals the
+    // recomputed one: adversarially-crafted fuzz inputs can store an arbitrary
+    // hash field that does not match the body content, and that is a valid input
+    // for the purpose of this target (which only tests hash stability, not
+    // block validity).
+    let _ = (block.header.hash, recomputed);
 });
