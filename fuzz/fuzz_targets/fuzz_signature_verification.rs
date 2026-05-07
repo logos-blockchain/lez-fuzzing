@@ -22,7 +22,7 @@ fuzz_target!(|data: &[u8]| {
     if let Ok(key_wrap) = ArbPrivateKey::arbitrary(&mut u) {
         let private_key = key_wrap.0;
         let public_key = PublicKey::new_from_private_key(&private_key);
-        let msg: Vec<u8> = u.arbitrary().unwrap_or_default();
+        let msg: [u8; 32] = u.arbitrary().unwrap_or_default();
 
         let sig = Signature::new(&private_key, &msg);
         assert!(
@@ -36,7 +36,7 @@ fuzz_target!(|data: &[u8]| {
         ArbSignature::arbitrary(&mut u),
         ArbPublicKey::arbitrary(&mut u),
     ) {
-        let msg: Vec<u8> = u.arbitrary().unwrap_or_default();
+        let msg: [u8; 32] = u.arbitrary().unwrap_or_default();
         // The result may be true or false — we only assert no panic.
         let _ = sig_wrap.0.is_valid_for(&msg, &pk_wrap.0);
     }
@@ -47,7 +47,7 @@ fuzz_target!(|data: &[u8]| {
         ArbPrivateKey::arbitrary(&mut u),
     ) {
         let public_b = PublicKey::new_from_private_key(&key_b_wrap.0);
-        let msg: Vec<u8> = u.arbitrary().unwrap_or_default();
+        let msg: [u8; 32] = u.arbitrary().unwrap_or_default();
         let sig_from_a = Signature::new(&key_a_wrap.0, &msg);
         // Must not panic regardless of key mismatch.
         let _ = sig_from_a.is_valid_for(&msg, &public_b);
