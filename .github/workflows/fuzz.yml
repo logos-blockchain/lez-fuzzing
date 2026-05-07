@@ -62,7 +62,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz --locked
+        run: cargo install cargo-fuzz
 
       - name: Build fuzz target
         run: cargo fuzz build ${{ matrix.target }}
@@ -112,7 +112,7 @@ jobs:
         uses: ./logos-execution-zone/.github/actions/install-logos-blockchain-circuits
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-      - run: cargo install cargo-fuzz --locked
+      - run: cargo install cargo-fuzz
       - name: Reproduce corpus
         run: |
           cargo fuzz run ${{ matrix.target }} \
@@ -159,7 +159,7 @@ jobs:
         uses: ./logos-execution-zone/.github/actions/install-logos-blockchain-circuits
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-      - run: cargo install cargo-fuzz --locked
+      - run: cargo install cargo-fuzz
       - name: Measure throughput (30 s per target)
         run: |
           for target in \
