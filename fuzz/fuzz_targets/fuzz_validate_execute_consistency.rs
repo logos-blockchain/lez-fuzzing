@@ -12,6 +12,12 @@
 //!    - every account changed by `execute_check_on_state` must appear in the diff;
 //!      a silent state-widening bug (execute touches an extra account not declared
 //!      in the diff) is caught by the reverse check.
+//!
+//! 3. **Balance conservation** — when both succeed, the sum of all known account
+//!    balances (genesis ∪ diff-declared) must be identical before and after the
+//!    transaction.  This catches double-credit and token-inflation bugs that both
+//!    methods could agree on silently (INVARIANT 2a/2b only check consistency
+//!    between the two methods, not correctness of the arithmetic itself).
 
 use fuzz_props::arbitrary_types::ArbNSSATransaction;
 use libfuzzer_sys::fuzz_target;
@@ -85,6 +91,38 @@ fuzz_target!(|wrapped: ArbNSSATransaction| {
                     );
                 }
             }
+
+            // INVARIANT 3 (balance conservation): Σ balances must be identical before and after
+            // a successful transaction over all known accounts (genesis ∪ diff-declared accounts).
+            //
+            // This catches double-credit and token-inflation bugs that both validate_on_state and
+            // execute_check_on_state could agree on silently — e.g. a transfer path that credits
+            // the recipient without debiting the sender.  INVARIANT 2a/2b only check that the two
+            // methods agree with each other; they do not catch the case where both are wrong in the
+            // same direction.
+            //
+            // Limitation: accounts created brand-new by execute_check_on_state that are absent from
+            // both genesis and the diff are not included here (see the known limitation in INVARIANT
+            // 2b above).  A transfer to a freshly-created account would inflate the known total.
+            let known_ids: std::collections::HashSet<nssa::AccountId> = init_accs
+                .iter()
+                .map(|&(id, _)| id)
+                .chain(public_diff.keys().copied())
+                .collect();
+            let total_before: u128 = known_ids
+                .iter()
+                .map(|id| state.get_account_by_id(*id).balance)
+                .fold(0u128, u128::saturating_add);
+            let total_after: u128 = known_ids
+                .iter()
+                .map(|id| exec_state.get_account_by_id(*id).balance)
+                .fold(0u128, u128::saturating_add);
+            assert_eq!(
+                total_before,
+                total_after,
+                "INVARIANT VIOLATION: total balance of known accounts changed after successful \
+                 transaction (possible double-credit or token-inflation bug)",
+            );
         }
         (Err(_), Err(_)) => {
             // Both failed — correct.

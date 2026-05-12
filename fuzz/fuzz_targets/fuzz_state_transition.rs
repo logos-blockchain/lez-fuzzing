@@ -53,6 +53,26 @@ fuzz_target!(|data: &[u8]| {
                     acc_id
                 );
             }
+        } else {
+            // INVARIANT: total balance of known accounts must be conserved on success.
+            // Catches double-credit and token-inflation bugs — two transfer paths that
+            // each credit the recipient without debiting the sender would inflate the
+            // total, but neither the rejection check nor any other per-account check
+            // catches it unless we compare the aggregate.
+            let total_before: u128 = init_accs
+                .iter()
+                .map(|&(acc_id, _)| state_snapshot.get_account_by_id(acc_id).balance)
+                .fold(0u128, u128::saturating_add);
+            let total_after: u128 = init_accs
+                .iter()
+                .map(|&(acc_id, _)| state.get_account_by_id(acc_id).balance)
+                .fold(0u128, u128::saturating_add);
+            assert_eq!(
+                total_before,
+                total_after,
+                "INVARIANT VIOLATION: total balance of genesis accounts changed after successful \
+                 transaction (possible double-credit or token-inflation bug)",
+            );
         }
     }
 });
