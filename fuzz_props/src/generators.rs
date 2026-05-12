@@ -77,19 +77,9 @@ pub fn arb_fuzz_native_transfer(
 
 // ── Arbitrary (for libFuzzer targets) ────────────────────────────────────────
 
-/// A best-effort attempt to create a structurally plausible `NSSATransaction`
-/// from unstructured bytes. Falls back to raw borsh decoding.
+/// Generate a structurally plausible `NSSATransaction` from unstructured bytes.
 pub fn arbitrary_transaction(u: &mut Unstructured<'_>) -> arbitrary::Result<NSSATransaction> {
-    // Prefer structured generation (via Arbitrary impls); raw borsh decode as fallback.
-    if bool::arbitrary(u)? {
-        let raw = Vec::<u8>::arbitrary(u)?;
-        borsh::from_slice::<NSSATransaction>(&raw).map_err(|_| arbitrary::Error::IncorrectFormat)
-    } else {
-        // Use the full ArbNSSATransaction generator, which produces both Public and
-        // ProgramDeployment variants with realistic account IDs, nonces, and witness sets —
-        // far richer than the previous degenerate single-byte key / empty-message path.
-        ArbNSSATransaction::arbitrary(u).map(|w| w.0)
-    }
+    ArbNSSATransaction::arbitrary(u).map(|w| w.0)
 }
 
 // ── proptest strategies ───────────────────────────────────────────────────────
