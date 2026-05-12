@@ -1,17 +1,22 @@
 #![no_main]
 
 use arbitrary::{Arbitrary, Unstructured};
-use fuzz_props::generators::arbitrary_transaction;
+use fuzz_props::generators::{arb_fuzz_native_transfer, arbitrary_fuzz_state, arbitrary_transaction};
 use libfuzzer_sys::fuzz_target;
 use nssa::V03State;
-use testnet_initial_state::initial_accounts;
 
 fuzz_target!(|data: &[u8]| {
     let mut u = Unstructured::new(data);
 
-    // Build genesis account list from testnet initial state
-    let accs_data = initial_accounts();
-    let init_accs: Vec<(nssa::AccountId, u128)> = accs_data
+    // Generate a fuzz-driven initial state instead of always using the fixed
+    // testnet genesis.  This exposes state-dependent bugs that only manifest
+    // with specific account shapes (e.g. zero balance, u128::MAX balance, or a
+    // nonce at the wrap-around boundary).
+    let fuzz_accs = match arbitrary_fuzz_state(&mut u) {
+        Ok(accs) => accs,
+        Err(_) => return,
+    };
+    let init_accs: Vec<(nssa::AccountId, u128)> = fuzz_accs
         .iter()
         .map(|a| (a.account_id, a.balance))
         .collect();
@@ -22,7 +27,16 @@ fuzz_target!(|data: &[u8]| {
     // Generate up to 8 transactions and apply them
     let n_txs: u8 = u8::arbitrary(&mut u).unwrap_or(0) % 8;
     for i in 0..n_txs {
-        let Ok(tx) = arbitrary_transaction(&mut u) else {
+        // Mix correlated transactions (referencing known fuzz accounts and
+        // correctly signed) with random ones.  Correlated transactions give
+        // the fuzzer a direct path to successful state transitions; random ones
+        // exercise the rejection and isolation paths.
+        let tx_result = if bool::arbitrary(&mut u).unwrap_or(false) {
+            arb_fuzz_native_transfer(&mut u, &fuzz_accs)
+        } else {
+            arbitrary_transaction(&mut u)
+        };
+        let Ok(tx) = tx_result else {
             break;
         };
 

@@ -18,23 +18,43 @@
 //!    transaction.  This catches double-credit and token-inflation bugs that both
 //!    methods could agree on silently (INVARIANT 2a/2b only check consistency
 //!    between the two methods, not correctness of the arithmetic itself).
+//!
+//! The initial state is generated from the fuzz input (rather than a fixed
+//! testnet genesis) so that state-dependent bugs — those that only manifest
+//! with specific account shapes such as zero balance or `u128::MAX` — are
+//! reachable by the fuzzer.
 
+use arbitrary::{Arbitrary, Unstructured};
 use fuzz_props::arbitrary_types::ArbNSSATransaction;
+use fuzz_props::generators::arbitrary_fuzz_state;
 use libfuzzer_sys::fuzz_target;
 use nssa::V03State;
-use testnet_initial_state::initial_accounts;
 
-fuzz_target!(|wrapped: ArbNSSATransaction| {
-    let tx = wrapped.0;
+fuzz_target!(|data: &[u8]| {
+    let mut u = Unstructured::new(data);
+
+    // Generate a fuzz-driven initial state.  The state shape — account IDs,
+    // balances, and the private keys needed to sign transactions against it —
+    // is fully controlled by the fuzzer, exposing state-dependent bugs that
+    // the fixed testnet genesis would never reach.
+    let fuzz_accs = match arbitrary_fuzz_state(&mut u) {
+        Ok(accs) => accs,
+        Err(_) => return,
+    };
+    let init_accs: Vec<(nssa::AccountId, u128)> = fuzz_accs
+        .iter()
+        .map(|a| (a.account_id, a.balance))
+        .collect();
+
+    // Generate the transaction from the remaining fuzz bytes.
+    let tx = match ArbNSSATransaction::arbitrary(&mut u) {
+        Ok(w) => w.0,
+        Err(_) => return,
+    };
 
     // Stateless gate — skip structurally malformed transactions.
     let Ok(tx) = tx.transaction_stateless_check() else { return; };
 
-    let accs_data = initial_accounts();
-    let init_accs: Vec<(nssa::AccountId, u128)> = accs_data
-        .iter()
-        .map(|a| (a.account_id, a.balance))
-        .collect();
     let state = V03State::new_with_genesis_accounts(&init_accs, vec![], 0);
 
     // validate_on_state borrows `tx` and `state` — does NOT mutate state.

@@ -2,9 +2,78 @@ use arbitrary::{Arbitrary, Unstructured};
 use common::{block::HashableBlockData, transaction::NSSATransaction};
 use nssa::{AccountId, PrivateKey};
 
-use crate::arbitrary_types::ArbNSSATransaction;
+use crate::arbitrary_types::{ArbAccountId, ArbNSSATransaction, ArbPrivateKey};
 use proptest::prelude::*;
 use testnet_initial_state::initial_pub_accounts_private_keys;
+
+// ── Fuzz-driven state generation ─────────────────────────────────────────────
+
+/// An account with an arbitrary identifier, balance, and private key,
+/// generated entirely from unstructured fuzzer bytes.
+///
+/// Using random account IDs (rather than the fixed `testnet_initial_state` set)
+/// exposes state-dependent bugs that only manifest with specific account shapes —
+/// for example: zero balance, [`u128::MAX`] balance, or a nonce at the
+/// wrap-around boundary.  The [`PrivateKey`] field lets downstream generators
+/// produce correctly-signed transfers referencing accounts present in this state.
+pub struct FuzzAccount {
+    pub account_id: AccountId,
+    pub balance: u128,
+    pub private_key: PrivateKey,
+}
+
+/// Generate 1–8 fuzz-driven accounts with arbitrary IDs, balances, and keys.
+///
+/// Call this before generating transactions so the constructed [`nssa::V03State`]
+/// has a shape controlled by the fuzzer rather than fixed at compile time.
+pub fn arbitrary_fuzz_state(u: &mut Unstructured<'_>) -> arbitrary::Result<Vec<FuzzAccount>> {
+    let n = ((u8::arbitrary(u)? as usize) % 8) + 1; // 1..=8
+    (0..n)
+        .map(|_| {
+            Ok(FuzzAccount {
+                account_id: ArbAccountId::arbitrary(u)?.0,
+                balance: u128::arbitrary(u)?,
+                private_key: ArbPrivateKey::arbitrary(u)?.0,
+            })
+        })
+        .collect()
+}
+
+/// Generate a native-transfer [`NSSATransaction`] between two accounts chosen
+/// from `accounts`.
+///
+/// Because every account in the slice has a known private key, the resulting
+/// transaction is correctly signed and references account IDs that actually
+/// exist in the fuzz-generated state — giving the fuzzer a direct path to
+/// exercise **successful** state transitions rather than only rejection paths.
+///
+/// Self-transfers (`from_idx == to_idx`) are allowed since they are a useful
+/// edge case (balance should remain unchanged).
+pub fn arb_fuzz_native_transfer(
+    u: &mut Unstructured<'_>,
+    accounts: &[FuzzAccount],
+) -> arbitrary::Result<NSSATransaction> {
+    if accounts.is_empty() {
+        return Err(arbitrary::Error::IncorrectFormat);
+    }
+    let from_idx = (u8::arbitrary(u)? as usize) % accounts.len();
+    let to_idx = (u8::arbitrary(u)? as usize) % accounts.len();
+    let nonce = u128::arbitrary(u)?;
+    let amount = u128::arbitrary(u)?;
+
+    let from = &accounts[from_idx];
+    let to = &accounts[to_idx];
+
+    Ok(
+        common::test_utils::create_transaction_native_token_transfer(
+            from.account_id,
+            nonce,
+            to.account_id,
+            amount,
+            &from.private_key,
+        ),
+    )
+}
 
 // ── Arbitrary (for libFuzzer targets) ────────────────────────────────────────
 
