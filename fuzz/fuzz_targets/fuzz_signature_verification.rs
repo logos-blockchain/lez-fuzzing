@@ -8,7 +8,7 @@
 //! 2. **No panics** — random (possibly invalid) signatures and public keys must never cause a
 //!    panic in `is_valid_for`.
 //! 3. **Cross-key soundness** — signing with key A and verifying against key B must not panic
-//!    (the result may be `false` or, with negligible probability, accidentally `true`).
+//!    (the result must be `false`; if it is `true` that is a security invariant violation).
 
 use arbitrary::{Arbitrary, Unstructured};
 use fuzz_props::arbitrary_types::{ArbPrivateKey, ArbPublicKey, ArbSignature};
@@ -41,15 +41,22 @@ fuzz_target!(|data: &[u8]| {
         let _ = sig_wrap.0.is_valid_for(&msg, &pk_wrap.0);
     }
 
-    // ── 3. Cross-key verification must not panic ───────────────────────────────
+    // ── 3. Cross-key soundness: different keys must never cross-verify ─────────
     if let (Ok(key_a_wrap), Ok(key_b_wrap)) = (
         ArbPrivateKey::arbitrary(&mut u),
         ArbPrivateKey::arbitrary(&mut u),
     ) {
+        let public_a = PublicKey::new_from_private_key(&key_a_wrap.0);
         let public_b = PublicKey::new_from_private_key(&key_b_wrap.0);
         let msg: [u8; 32] = u.arbitrary().unwrap_or_default();
         let sig_from_a = Signature::new(&key_a_wrap.0, &msg);
-        // Must not panic regardless of key mismatch.
-        let _ = sig_from_a.is_valid_for(&msg, &public_b);
+
+        if public_a != public_b {
+            assert!(
+                !sig_from_a.is_valid_for(&msg, &public_b),
+                "INVARIANT VIOLATION: signature created with key_a verified successfully \
+                 against key_b where key_a != key_b (cross-key forgery / broken verification)"
+            );
+        }
     }
 });
