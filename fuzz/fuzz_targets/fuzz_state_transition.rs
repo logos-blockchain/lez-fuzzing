@@ -56,37 +56,59 @@ fuzz_target!(|data: &[u8]| {
         let timestamp: u64 = u64::from(i);
         let result = tx.execute_check_on_state(&mut state, block_id, timestamp);
 
-        if result.is_err() {
-            // INVARIANT: a rejected tx must leave public account balances unchanged
-            for &(acc_id, _) in &init_accs {
-                let bal_before = state_snapshot.get_account_by_id(acc_id).balance;
-                let bal_after = state.get_account_by_id(acc_id).balance;
+        match result {
+            Err(_) => {
+                // INVARIANT: StateIsolationOnFailure — a rejected tx must leave
+                // public account balances unchanged.
+                for &(acc_id, _) in &init_accs {
+                    let bal_before = state_snapshot.get_account_by_id(acc_id).balance;
+                    let bal_after = state.get_account_by_id(acc_id).balance;
+                    assert_eq!(
+                        bal_before, bal_after,
+                        "INVARIANT VIOLATION [StateIsolationOnFailure]: balance changed \
+                         despite tx rejection for account {:?}",
+                        acc_id
+                    );
+                }
+            }
+            Ok(applied_tx) => {
+                // INVARIANT: BalanceConservation — total balance of known accounts
+                // must be conserved on success.  Catches double-credit and
+                // token-inflation bugs — two transfer paths that each credit the
+                // recipient without debiting the sender would inflate the total, but
+                // neither the rejection check nor any other per-account check catches
+                // it unless we compare the aggregate.
+                let total_before: u128 = init_accs
+                    .iter()
+                    .map(|&(acc_id, _)| state_snapshot.get_account_by_id(acc_id).balance)
+                    .fold(0u128, u128::saturating_add);
+                let total_after: u128 = init_accs
+                    .iter()
+                    .map(|&(acc_id, _)| state.get_account_by_id(acc_id).balance)
+                    .fold(0u128, u128::saturating_add);
                 assert_eq!(
-                    bal_before, bal_after,
-                    "INVARIANT VIOLATION: balance changed despite tx rejection for account {:?}",
-                    acc_id
+                    total_before,
+                    total_after,
+                    "INVARIANT VIOLATION [BalanceConservation]: total balance of genesis \
+                     accounts changed after successful transaction (double-credit / \
+                     token-inflation bug)",
+                );
+
+                // INVARIANT: ReplayRejection — the nonce is consumed on first
+                // acceptance; replaying the identical transaction in the very next
+                // block must be rejected.
+                // `execute_check_on_state` returns the `ValidatedTransaction` on
+                // success, so we can feed it back without re-validating.
+                let replay_result =
+                    applied_tx.execute_check_on_state(&mut state, block_id + 1, timestamp + 1);
+                assert!(
+                    replay_result.is_err(),
+                    "INVARIANT VIOLATION [ReplayRejection]: transaction accepted twice — \
+                     nonce replay not prevented (first block_id={block_id}, replay \
+                     block_id={})",
+                    block_id + 1,
                 );
             }
-        } else {
-            // INVARIANT: total balance of known accounts must be conserved on success.
-            // Catches double-credit and token-inflation bugs — two transfer paths that
-            // each credit the recipient without debiting the sender would inflate the
-            // total, but neither the rejection check nor any other per-account check
-            // catches it unless we compare the aggregate.
-            let total_before: u128 = init_accs
-                .iter()
-                .map(|&(acc_id, _)| state_snapshot.get_account_by_id(acc_id).balance)
-                .fold(0u128, u128::saturating_add);
-            let total_after: u128 = init_accs
-                .iter()
-                .map(|&(acc_id, _)| state.get_account_by_id(acc_id).balance)
-                .fold(0u128, u128::saturating_add);
-            assert_eq!(
-                total_before,
-                total_after,
-                "INVARIANT VIOLATION: total balance of genesis accounts changed after successful \
-                 transaction (possible double-credit or token-inflation bug)",
-            );
         }
     }
 });

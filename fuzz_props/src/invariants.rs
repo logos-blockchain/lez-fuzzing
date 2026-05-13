@@ -70,7 +70,18 @@ impl ProtocolInvariant for ReplayRejection {
     }
 
     fn check(&self, _ctx: &InvariantCtx<'_>) -> Option<InvariantViolation> {
-        // Implemented at the generator level in proptest (see generators.rs)
+        // ReplayRejection cannot be fully exercised through InvariantCtx alone,
+        // because the check requires *re-applying* the same ValidatedTransaction
+        // to the post-execution state.  InvariantCtx holds `tx: &NSSATransaction`,
+        // and `transaction_stateless_check()` consumes `self`, so re-validation
+        // from a shared reference is not possible.
+        //
+        // The invariant is enforced in two complementary ways instead:
+        //   1. `fuzz_state_transition.rs` — captures the `ValidatedTransaction`
+        //      returned on `Ok` by `execute_check_on_state` and immediately
+        //      re-applies it at block_id+1; asserts the replay is rejected.
+        //   2. The proptest suite in this module (`replay_rejection_proptest`)
+        //      exercises the same property with structured, reproducible inputs.
         None
     }
 }
@@ -132,5 +143,64 @@ mod tests {
             balances_before: make_empty_snapshot(),
         };
         assert_invariants(&ctx);
+    }
+}
+
+// ── ReplayRejection proptest suite ───────────────────────────────────────────
+//
+// This suite constitutes the formal, reproducible exercise of the ReplayRejection
+// invariant.  It generates a realistic initial state and a correctly-signed
+// native-transfer transaction, applies it once, and asserts that a second
+// application is rejected.
+//
+// Run with: cargo test -p fuzz_props replay_rejection
+#[cfg(test)]
+mod replay_proptest {
+    use crate::generators::{arb_native_transfer_tx, test_accounts};
+    use nssa::V03State;
+    use proptest::prelude::*;
+
+    /// Build a `V03State` from the testnet accounts, assigning each a fixed
+    /// balance large enough for any reasonable transfer amount.
+    fn make_test_state() -> V03State {
+        let accounts = test_accounts();
+        let init_accs: Vec<(nssa::AccountId, u128)> = accounts
+            .iter()
+            .map(|(id, _)| (*id, 1_000_000u128))
+            .collect();
+        V03State::new_with_genesis_accounts(&init_accs, vec![], 0)
+    }
+
+    proptest! {
+        /// **ReplayRejection** — a transaction accepted in block N must be
+        /// rejected when replayed in block N+1, because the nonce is consumed
+        /// on first acceptance.
+        #[test]
+        fn replay_rejection_proptest(tx in arb_native_transfer_tx(test_accounts())) {
+            let mut state = make_test_state();
+
+            // Stateless gate — skip structurally invalid transactions (e.g. those
+            // whose public key does not match the declared sender).
+            let validated_tx = match tx.transaction_stateless_check() {
+                Ok(v) => v,
+                Err(_) => return Ok(()),
+            };
+
+            // First application — may fail for state-level reasons (e.g. sender
+            // has insufficient balance, wrong nonce).  In that case there is
+            // nothing to replay.
+            let first_result = validated_tx.execute_check_on_state(&mut state, 1, 0);
+
+            if let Ok(validated_tx) = first_result {
+                // The same ValidatedTransaction is returned on Ok; replay it
+                // immediately in the next block.
+                let second_result = validated_tx.execute_check_on_state(&mut state, 2, 1);
+                prop_assert!(
+                    second_result.is_err(),
+                    "ReplayRejection violated: transaction accepted a second time (nonce \
+                     replay not prevented)"
+                );
+            }
+        }
     }
 }
