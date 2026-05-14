@@ -32,7 +32,7 @@ The `lez-fuzzing` repository is a **coverage-guided, structured mutation fuzzing
 | CI ergonomics | Requires AFL++ binary in CI image | `cargo install cargo-fuzz` only |
 | Rust integration | `cargo-afl` | `cargo-fuzz` |
 
-**Decision-maker view**: AFL++ and libFuzzer find *different* bugs because they use different mutation heuristics. Running both on the same corpus is the industry-standard "belt and suspenders" approach. [`docs/fuzzing.md`](docs/fuzzing.md:273) already lists `just fuzz-afl` as planned future work. **Incremental cost is low** — the same [`fuzz_props`](fuzz_props/src/lib.rs) crate and seed corpus work unchanged.
+**Decision-maker view**: AFL++ and libFuzzer find *different* bugs because they use different mutation heuristics. Running both on the same corpus is the industry-standard "belt and suspenders" approach. [`docs/fuzzing.md`](docs/fuzzing.md:334) already lists `just fuzz-afl` as planned future work. **Incremental cost is low** — the same [`fuzz_props`](fuzz_props/src/lib.rs) crate and seed corpus work unchanged.
 
 ---
 
@@ -69,9 +69,9 @@ The `lez-fuzzing` repository is a **coverage-guided, structured mutation fuzzing
 
 ### 4. Differential Fuzzing (Sequencer vs. Replayer)
 
-**What it is**: Feed identical inputs to two independent implementations of the same interface and assert identical outputs. Already **partially implemented** in [`fuzz_validate_execute_consistency.rs`](fuzz/fuzz_targets/fuzz_validate_execute_consistency.rs) — it compares [`validate_on_state`](fuzz/fuzz_targets/fuzz_validate_execute_consistency.rs:35) vs. [`execute_check_on_state`](fuzz/fuzz_targets/fuzz_validate_execute_consistency.rs:39).
+**What it is**: Feed identical inputs to two independent implementations of the same interface and assert identical outputs. Already **partially implemented** in [`fuzz_validate_execute_consistency.rs`](fuzz/fuzz_targets/fuzz_validate_execute_consistency.rs) — it compares [`validate_on_state`](fuzz/fuzz_targets/fuzz_validate_execute_consistency.rs:61) vs. [`execute_check_on_state`](fuzz/fuzz_targets/fuzz_validate_execute_consistency.rs:65), and also asserts balance conservation.
 
-The extension noted in [`docs/fuzzing.md`](docs/fuzzing.md:274) is:
+The extension noted in [`docs/fuzzing.md`](docs/fuzzing.md:335) is:
 
 > Feed the same block to `SequencerCore` and `indexer_core` and assert identical state roots.
 
@@ -111,7 +111,7 @@ The extension noted in [`docs/fuzzing.md`](docs/fuzzing.md:274) is:
 | Execution time | Slow (recompile per mutation) | Continuous |
 | Output | Surviving mutants = assertion gaps | Crash artifacts |
 
-**Decision-maker view**: `cargo-mutants` would **audit the invariant assertions themselves** — revealing if [`assert_invariants()`](fuzz_props/src/invariants.rs:72) has gaps (and it currently does, as [`StateIsolationOnFailure`](fuzz_props/src/invariants.rs:38) and [`ReplayRejection`](fuzz_props/src/invariants.rs:59) are stubs). This is a **complementary quality gate**, not a fuzzing replacement. Low cost (~1 day), highly useful before an external security audit.
+**Decision-maker view**: `cargo-mutants` would **audit the invariant assertions themselves** — revealing if [`assert_invariants()`](fuzz_props/src/invariants.rs:90) has gaps. [`StateIsolationOnFailure`](fuzz_props/src/invariants.rs:38) is fully implemented; [`ReplayRejection`](fuzz_props/src/invariants.rs:65) is intentionally a no-op in `InvariantCtx` (enforced directly in `fuzz_state_transition` and `fuzz_replay_prevention`). This is a **complementary quality gate**, not a fuzzing replacement. Low cost (~1 day), highly useful before an external security audit.
 
 ---
 
@@ -135,9 +135,9 @@ The current implementation is **well-architected and production-ready** for a pr
 
 **Highest-ROI next steps, in priority order:**
 
-1. **Complete the stub invariants** in [`fuzz_props/src/invariants.rs`](fuzz_props/src/invariants.rs:41) — [`StateIsolationOnFailure`](fuzz_props/src/invariants.rs:38) and [`ReplayRejection`](fuzz_props/src/invariants.rs:59) are currently no-ops. This costs less than one day and immediately hardens all existing targets.
+1. **Verify and extend the inline invariants** — [`StateIsolationOnFailure`](fuzz_props/src/invariants.rs:38) in [`fuzz_props/src/invariants.rs`](fuzz_props/src/invariants.rs:40) is fully implemented. [`ReplayRejection`](fuzz_props/src/invariants.rs:65) is intentionally a no-op in `InvariantCtx` but enforced directly in `fuzz_state_transition` and `fuzz_replay_prevention`. Add `BalanceConservation` as a registered `ProtocolInvariant` to make it reusable across all targets (currently checked inline only).
 
-2. **Add the sequencer-vs-replayer differential target** — highest new bug-finding value, unique to this protocol's architecture, already identified in [`docs/fuzzing.md`](docs/fuzzing.md:274).
+2. **Add the sequencer-vs-replayer differential target** — highest new bug-finding value, unique to this protocol's architecture, already identified in [`docs/fuzzing.md`](docs/fuzzing.md:335).
 
 3. **Add AFL++ as a parallel fuzzing lane** (`just fuzz-afl`) — zero corpus migration cost, discovers different mutation paths through the same targets as libFuzzer.
 

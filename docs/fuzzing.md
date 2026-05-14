@@ -65,13 +65,13 @@ just fuzz-regression
 |--------|---------------|-------------|
 | `fuzz_transaction_decoding` | Borsh decoding of `NSSATransaction`, `Block`, and `HashableBlockData`; roundtrip re-encoding of successfully decoded transactions | `fuzz/fuzz_targets/fuzz_transaction_decoding.rs` |
 | `fuzz_stateless_verification` | `transaction_stateless_check()` no-panic on arbitrary bytes; idempotency — a transaction that passes the check must pass it again | `fuzz/fuzz_targets/fuzz_stateless_verification.rs` |
-| `fuzz_state_transition` | `execute_check_on_state()` across up to 8 transactions with monotonically-advancing block context; asserts balance isolation on rejection | `fuzz/fuzz_targets/fuzz_state_transition.rs` |
-| `fuzz_block_verification` | `block_hash()` no-panic and determinism — recomputing the hash of any fuzz-generated `Block` must never panic and must return the same value on repeated calls | `fuzz/fuzz_targets/fuzz_block_verification.rs` |
-| `fuzz_encoding_roundtrip` | `decode(encode(tx)) == Ok(tx)` and `encode(decode(encode(tx))) == encode(tx)` for `PublicTransaction` and `ProgramDeploymentTransaction` | `fuzz/fuzz_targets/fuzz_encoding_roundtrip.rs` |
+| `fuzz_state_transition` | `execute_check_on_state()` across up to 8 transactions with fuzz-driven initial state and monotonically-advancing block context; asserts **StateIsolationOnFailure** (balances unchanged on rejection), **BalanceConservation** (total balance unchanged on success), and **ReplayRejection** (nonce consumed on first acceptance) | `fuzz/fuzz_targets/fuzz_state_transition.rs` |
+| `fuzz_block_verification` | Three block-hash invariants: **HashRoundTrip** (`HashableBlockData::from(Block)` is lossless), **HashPreimage** (block_id, prev_block_hash, timestamp each individually affect the hash), **TxOrderCommitment** (reversing the transaction list changes the hash) | `fuzz/fuzz_targets/fuzz_block_verification.rs` |
+| `fuzz_encoding_roundtrip` | `decode(encode(tx)) == Ok(tx)` and `encode(decode(encode(tx))) == encode(tx)` for `PublicTransaction` and `ProgramDeploymentTransaction`; raw bytes that decode successfully must re-encode identically (canonical encoding) | `fuzz/fuzz_targets/fuzz_encoding_roundtrip.rs` |
 | `fuzz_signature_verification` | Signature correctness (sign→verify), no-panic on random bytes, cross-key soundness | `fuzz/fuzz_targets/fuzz_signature_verification.rs` |
-| `fuzz_replay_prevention` | A tx accepted in block N must be rejected when replayed in block N+1 (nonce consumed) | `fuzz/fuzz_targets/fuzz_replay_prevention.rs` |
-| `fuzz_state_diff_computation` | `ValidatedStateDiff` only modifies accounts declared in `affected_public_account_ids()` | `fuzz/fuzz_targets/fuzz_state_diff_computation.rs` |
-| `fuzz_validate_execute_consistency` | `validate_on_state` and `execute_check_on_state` must agree on success/failure and produce identical state changes | `fuzz/fuzz_targets/fuzz_validate_execute_consistency.rs` |
+| `fuzz_replay_prevention` | A tx accepted in block N must be rejected when replayed in block N+1 (nonce consumed); fuzz-driven initial state exposes nonce edge cases (nonce 0, `u128::MAX`, zero-balance sender) | `fuzz/fuzz_targets/fuzz_replay_prevention.rs` |
+| `fuzz_state_diff_computation` | **Forward containment**: `ValidatedStateDiff` only modifies accounts declared in `affected_public_account_ids()`; **Reverse completeness**: every declared account actually modified by `execute_check_on_state` appears in the diff | `fuzz/fuzz_targets/fuzz_state_diff_computation.rs` |
+| `fuzz_validate_execute_consistency` | `validate_on_state` and `execute_check_on_state` must agree on success/failure; diff accuracy (forward + reverse); **BalanceConservation** on success | `fuzz/fuzz_targets/fuzz_validate_execute_consistency.rs` |
 
 ---
 
@@ -210,12 +210,28 @@ Open a PR. The `regression` CI job will permanently block re-introduction of thi
 Shared invariants live in `fuzz_props/src/invariants.rs`. Each invariant implements
 `ProtocolInvariant` and is automatically run by `assert_invariants()`.
 
-Concrete invariants currently registered:
+Concrete invariants currently registered in `assert_invariants()`:
 
-| Invariant | Description |
-|-----------|-------------|
-| `StateIsolationOnFailure` | Account balances must not change when a transaction is rejected |
-| `ReplayRejection` | An accepted transaction must be rejected when replayed (see `fuzz_replay_prevention`) |
+| Invariant | Description | Implementation status |
+|-----------|-------------|----------------------|
+| `StateIsolationOnFailure` | Per-account balance must not change for any tracked account when a transaction is rejected | ✅ Fully implemented in `fuzz_props/src/invariants.rs` |
+| `ReplayRejection` | An accepted transaction must be rejected when replayed | ⚠️ Returns `None` from `InvariantCtx` (see note below); enforced directly in `fuzz_state_transition` and `fuzz_replay_prevention` |
+
+> **Note on `ReplayRejection`:** The check cannot be fully exercised through `InvariantCtx`
+> because it requires re-applying the `ValidatedTransaction` returned on `Ok` by
+> `execute_check_on_state` — which consumes `self` — to the post-execution state.  The
+> invariant is enforced in two complementary ways: (1) `fuzz_state_transition.rs` replays
+> every accepted transaction in the next block and asserts rejection; (2) the proptest suite
+> `replay_rejection_proptest` in `fuzz_props/src/invariants.rs` exercises the same property
+> with reproducible structured inputs.
+
+Additional invariants enforced **inline** in specific targets (not via `ProtocolInvariant`):
+
+| Invariant | Targets |
+|-----------|---------|
+| `BalanceConservation` | `fuzz_state_transition`, `fuzz_validate_execute_consistency` |
+| `HashRoundTrip` / `HashPreimage` / `TxOrderCommitment` | `fuzz_block_verification` |
+| Diff forward containment / reverse completeness | `fuzz_state_diff_computation` |
 
 To add a new invariant:
 
@@ -248,15 +264,17 @@ fuzz target parameters for zero-boilerplate structured fuzzing.
 | `ArbHashableBlockData` | `HashableBlockData` (0–7 `ArbNSSATransaction` entries, random header fields) |
 | `ArbNSSATransaction` | `NSSATransaction` (`Public` or `ProgramDeployment` variant; `PrivacyPreserving` excluded) |
 
-### `fuzz_props::generators` (proptest strategies + libFuzzer helpers)
+### `fuzz_props::generators` (libFuzzer helpers + proptest strategies)
 
 | Generator | Covers |
 |-----------|--------|
-| `arbitrary_transaction()` | Best-effort structured `NSSATransaction` from unstructured bytes, falls back to raw Borsh decode |
-| `arb_borsh_transaction_bytes()` | Raw Borsh bytes including invalid encodings (IS-2) |
-| `arb_native_transfer_tx()` | Valid native-transfer `NSSATransaction` between known genesis accounts |
+| `arbitrary_fuzz_state()` | 1–8 fuzz-driven accounts with arbitrary IDs, balances, and private keys; used by `fuzz_state_transition`, `fuzz_replay_prevention`, `fuzz_validate_execute_consistency`, `fuzz_state_diff_computation` |
+| `arb_fuzz_native_transfer()` | Correctly-signed native-transfer `NSSATransaction` referencing accounts from an `arbitrary_fuzz_state()` result; gives the fuzzer a path to successful state transitions |
+| `arbitrary_transaction()` | Structured `NSSATransaction` (`Public` or `ProgramDeployment`) from unstructured bytes via `ArbNSSATransaction` |
+| `arb_borsh_transaction_bytes()` | Raw Borsh bytes including invalid encodings |
+| `arb_native_transfer_tx()` | Valid native-transfer `NSSATransaction` between known testnet genesis accounts (proptest strategy) |
 | `test_accounts()` | Returns `(AccountId, PrivateKey)` pairs from `testnet_initial_state` |
-| `arb_hashable_block_data()` | `HashableBlockData` with 0–8 valid native transfers |
+| `arb_hashable_block_data()` | `HashableBlockData` with 0–8 valid native transfers (proptest strategy) |
 | `arb_invalid_account_state_tx()` | Phantom accounts + overflow amounts — expected to be rejected (IS-3) |
 | `arb_duplicate_tx_sequence()` | Duplicated + re-ordered transaction sequences (IS-4) |
 | `arb_pathological_sequence()` | Zero-value, self-transfer, max-nonce inputs (IS-5) |

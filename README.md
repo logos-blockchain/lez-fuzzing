@@ -13,8 +13,6 @@ lez-fuzzing/
 ├── Justfile                # Turn-key entry-points
 ├── rust-toolchain.toml     # Pins Rust nightly (required by cargo-fuzz)
 ├── .gitignore
-├── scripts/
-│   └── add_fuzz_target.py  # Automates new-target scaffolding (called by just new-target)
 ├── fuzz_props/             # Shared invariant framework + input generators
 │   ├── Cargo.toml
 │   └── src/
@@ -39,6 +37,8 @@ lez-fuzzing/
 ├── .github/
 │   └── workflows/
 │       └── fuzz.yml        # CI: smoke-fuzz · regression · proptest · perf
+├── scripts/
+│   └── add_fuzz_target.py  # Automates new-target scaffolding (called by just new-target)
 └── docs/
     └── fuzzing.md          # Full developer guide
 ```
@@ -111,15 +111,15 @@ just fuzz-props
 
 | Target | Protocol layer | Entry point |
 |--------|---------------|-------------|
-| `fuzz_transaction_decoding` | Borsh decoding of all tx/block types | `fuzz/fuzz_targets/fuzz_transaction_decoding.rs` |
-| `fuzz_stateless_verification` | `transaction_stateless_check()` idempotency | `fuzz/fuzz_targets/fuzz_stateless_verification.rs` |
-| `fuzz_state_transition` | `V03State` transition + state-isolation invariant | `fuzz/fuzz_targets/fuzz_state_transition.rs` |
-| `fuzz_block_verification` | Block hash integrity | `fuzz/fuzz_targets/fuzz_block_verification.rs` |
-| `fuzz_encoding_roundtrip` | Borsh encode→decode→encode round-trip identity | `fuzz/fuzz_targets/fuzz_encoding_roundtrip.rs` |
-| `fuzz_signature_verification` | Signature creation + verification correctness and no-panic | `fuzz/fuzz_targets/fuzz_signature_verification.rs` |
-| `fuzz_replay_prevention` | Transaction nonce replay rejection | `fuzz/fuzz_targets/fuzz_replay_prevention.rs` |
-| `fuzz_state_diff_computation` | `ValidatedStateDiff` scope isolation (only declared accounts mutated) | `fuzz/fuzz_targets/fuzz_state_diff_computation.rs` |
-| `fuzz_validate_execute_consistency` | `validate_on_state` / `execute_check_on_state` agreement + diff accuracy | `fuzz/fuzz_targets/fuzz_validate_execute_consistency.rs` |
+| `fuzz_transaction_decoding` | Borsh decoding of all tx/block types (`NSSATransaction`, `Block`, `HashableBlockData`) with roundtrip re-encoding | `fuzz/fuzz_targets/fuzz_transaction_decoding.rs` |
+| `fuzz_stateless_verification` | `transaction_stateless_check()` no-panic + idempotency | `fuzz/fuzz_targets/fuzz_stateless_verification.rs` |
+| `fuzz_state_transition` | `V03State` transition: StateIsolationOnFailure + BalanceConservation + ReplayRejection invariants across up to 8 txs with fuzz-driven state | `fuzz/fuzz_targets/fuzz_state_transition.rs` |
+| `fuzz_block_verification` | Block hash integrity: HashRoundTrip · HashPreimage completeness (block_id/prev_hash/timestamp) · TxOrderCommitment | `fuzz/fuzz_targets/fuzz_block_verification.rs` |
+| `fuzz_encoding_roundtrip` | Borsh encode→decode→encode round-trip identity + canonical encoding for `PublicTransaction` and `ProgramDeploymentTransaction` | `fuzz/fuzz_targets/fuzz_encoding_roundtrip.rs` |
+| `fuzz_signature_verification` | Signature correctness (sign→verify), no-panic on random bytes, cross-key soundness | `fuzz/fuzz_targets/fuzz_signature_verification.rs` |
+| `fuzz_replay_prevention` | Transaction nonce replay rejection with fuzz-driven initial state | `fuzz/fuzz_targets/fuzz_replay_prevention.rs` |
+| `fuzz_state_diff_computation` | `ValidatedStateDiff` forward containment + reverse completeness (bidirectional isolation check) | `fuzz/fuzz_targets/fuzz_state_diff_computation.rs` |
+| `fuzz_validate_execute_consistency` | `validate_on_state` / `execute_check_on_state` agreement + diff accuracy + BalanceConservation | `fuzz/fuzz_targets/fuzz_validate_execute_consistency.rs` |
 
 ---
 
