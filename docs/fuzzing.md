@@ -72,6 +72,11 @@ just fuzz-regression
 | `fuzz_replay_prevention` | A tx accepted in block N must be rejected when replayed in block N+1 (nonce consumed); fuzz-driven initial state exposes nonce edge cases (nonce 0, `u128::MAX`, zero-balance sender) | `fuzz/fuzz_targets/fuzz_replay_prevention.rs` |
 | `fuzz_state_diff_computation` | **Forward containment**: `ValidatedStateDiff` only modifies accounts declared in `affected_public_account_ids()`; **Reverse completeness**: every declared account actually modified by `execute_check_on_state` appears in the diff | `fuzz/fuzz_targets/fuzz_state_diff_computation.rs` |
 | `fuzz_validate_execute_consistency` | `validate_on_state` and `execute_check_on_state` must agree on success/failure; diff accuracy (forward + reverse); **BalanceConservation** on success | `fuzz/fuzz_targets/fuzz_validate_execute_consistency.rs` |
+| `fuzz_state_serialization` | `V03State` Borsh no-panic (**NoPanic**) + **StateSerializationRoundtrip** (`encode(decode(encode(decode(data)))) == encode(decode(data))`) + **NullifierDeduplication** (hand-written `NullifierSet` deserializer returns `Err`, not panic, on duplicate nullifiers) | `fuzz/fuzz_targets/fuzz_state_serialization.rs` |
+| `fuzz_witness_set_verification` | `WitnessSet::is_valid_for` no-panic on adversarial input (**NoPanic**); **CorrectVerification** (`WitnessSet::for_message` always passes `is_valid_for` on the same message); **MessageIsolation** (witness set built for message A fails `is_valid_for` on any Borsh-distinct message B) | `fuzz/fuzz_targets/fuzz_witness_set_verification.rs` |
+| `fuzz_program_deployment_lifecycle` | `V03State::transition_from_program_deployment_transaction` no-panic on arbitrary WASM bytecode (**NoPanic**); **BalanceIsolation** (successful deployment must not move tokens); **StateIsolationOnFailure** (failed deployment must not change any genesis account balance or nonce) | `fuzz/fuzz_targets/fuzz_program_deployment_lifecycle.rs` |
+| `fuzz_apply_state_diff_split_path` | **SplitPathEquivalence**: for every known account, `validate_on_state` + `apply_state_diff` must produce exactly the same balance, nonce, data, and program_owner as `execute_check_on_state`; **NonceIncrementCorrectness**: nonce after the split path equals nonce after the direct path for all signer accounts (catches bugs in the two-step `apply_state_diff` nonce-increment logic) | `fuzz/fuzz_targets/fuzz_apply_state_diff_split_path.rs` |
+| `fuzz_multi_block_state_sequence` | **LongRangeBalanceConservation**: total genesis-account balance identical before and after all N (≤ 16) blocks; **FailedTxNonceStability**: every genesis-account nonce unchanged after a rejected transaction; **PerBlockReplayRejection**: every transaction accepted in block B is rejected in block B+1 (cumulative nonce-interaction coverage) | `fuzz/fuzz_targets/fuzz_multi_block_state_sequence.rs` |
 
 ---
 
@@ -296,8 +301,13 @@ Measured on a 4-core x86_64 Linux runner with `RISC0_DEV_MODE=1`:
 | `fuzz_replay_prevention` | ~5 000 exec/sec |
 | `fuzz_state_diff_computation` | ~10 000 exec/sec |
 | `fuzz_validate_execute_consistency` | ~3 000 exec/sec |
+| `fuzz_state_serialization` | ~100 000 exec/sec *(estimate)* |
+| `fuzz_witness_set_verification` | ~15 000 exec/sec *(estimate)* |
+| `fuzz_program_deployment_lifecycle` | ~4 000 exec/sec *(estimate)* |
+| `fuzz_apply_state_diff_split_path` | ~5 000 exec/sec *(estimate)* |
+| `fuzz_multi_block_state_sequence` | ~1 000 exec/sec *(estimate)* |
 
-> Numbers for the five newer targets are rough estimates; run `just perf-baseline`
+> Throughput figures for the five new targets are rough estimates; run `just perf-baseline`
 > locally or check the `perf-baseline` CI artifact for up-to-date measurements.
 
 Recommended local settings for longer runs:

@@ -32,7 +32,12 @@ lez-fuzzing/
 │   │   ├── fuzz_signature_verification.rs
 │   │   ├── fuzz_replay_prevention.rs
 │   │   ├── fuzz_state_diff_computation.rs
-│   │   └── fuzz_validate_execute_consistency.rs
+│   │   ├── fuzz_validate_execute_consistency.rs
+│   │   ├── fuzz_state_serialization.rs
+│   │   ├── fuzz_witness_set_verification.rs
+│   │   ├── fuzz_program_deployment_lifecycle.rs
+│   │   ├── fuzz_apply_state_diff_split_path.rs
+│   │   └── fuzz_multi_block_state_sequence.rs
 │   └── corpus/             # Curated seed inputs (one dir per target)
 ├── .github/
 │   └── workflows/
@@ -120,6 +125,11 @@ just fuzz-props
 | `fuzz_replay_prevention` | Transaction nonce replay rejection with fuzz-driven initial state | `fuzz/fuzz_targets/fuzz_replay_prevention.rs` |
 | `fuzz_state_diff_computation` | `ValidatedStateDiff` forward containment + reverse completeness (bidirectional isolation check) | `fuzz/fuzz_targets/fuzz_state_diff_computation.rs` |
 | `fuzz_validate_execute_consistency` | `validate_on_state` / `execute_check_on_state` agreement + diff accuracy + BalanceConservation | `fuzz/fuzz_targets/fuzz_validate_execute_consistency.rs` |
+| `fuzz_state_serialization` | `V03State` Borsh decode no-panic + StateSerializationRoundtrip idempotency + NullifierDeduplication (`NullifierSet` hand-written impl) | `fuzz/fuzz_targets/fuzz_state_serialization.rs` |
+| `fuzz_witness_set_verification` | `WitnessSet::is_valid_for` no-panic + CorrectVerification (sign→verify) + MessageIsolation (witness set for msg A rejected on msg B) | `fuzz/fuzz_targets/fuzz_witness_set_verification.rs` |
+| `fuzz_program_deployment_lifecycle` | `V03State::transition_from_program_deployment_transaction` no-panic + BalanceIsolation (deployment must not move tokens) + StateIsolationOnFailure | `fuzz/fuzz_targets/fuzz_program_deployment_lifecycle.rs` |
+| `fuzz_apply_state_diff_split_path` | SplitPathEquivalence: `validate_on_state + apply_state_diff` == `execute_check_on_state` for all known accounts (balance, nonce, data, program_owner); NonceIncrementCorrectness | `fuzz/fuzz_targets/fuzz_apply_state_diff_split_path.rs` |
+| `fuzz_multi_block_state_sequence` | LongRangeBalanceConservation across up to 16 blocks + FailedTxNonceStability (nonce must not change on rejection) + PerBlockReplayRejection | `fuzz/fuzz_targets/fuzz_multi_block_state_sequence.rs` |
 
 ---
 
@@ -185,6 +195,12 @@ GitHub Actions runs four jobs on every push/PR and nightly:
 | `regression` (matrix, 9 targets) | Replays the saved corpus (`-runs=0`) |
 | `proptest` | `cargo test -p fuzz_props --release` |
 | `perf-baseline` (nightly only) | Measures exec/sec per target, uploads `perf_baseline.txt` |
+
+> **Note:** The CI matrix currently lists the original 9 targets. The 5 new targets
+> (`fuzz_state_serialization`, `fuzz_witness_set_verification`,
+> `fuzz_program_deployment_lifecycle`, `fuzz_apply_state_diff_split_path`,
+> `fuzz_multi_block_state_sequence`) need to be added to `.github/workflows/fuzz.yml`
+> — see [`docs/fuzzing.md`](docs/fuzzing.md) for the manual fallback instructions.
 
 ---
 
