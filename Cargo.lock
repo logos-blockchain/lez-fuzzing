@@ -677,6 +677,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "authenticated_transfer_core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1091,6 +1098,7 @@ name = "common"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "authenticated_transfer_core",
  "base64",
  "borsh",
  "clock_core",
@@ -1776,6 +1784,14 @@ name = "fastrand"
 version = "2.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f1f227452a390804cdb637b74a86990f2a7d7ba4b7d5693aac9b4dd6defd8d6"
+
+[[package]]
+name = "faucet_core"
+version = "0.1.0"
+dependencies = [
+ "nssa_core",
+ "serde",
+]
 
 [[package]]
 name = "ff"
@@ -4265,6 +4281,7 @@ dependencies = [
  "anyhow",
  "borsh",
  "clock_core",
+ "faucet_core",
  "hex",
  "k256",
  "log",
