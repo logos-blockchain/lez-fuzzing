@@ -25,8 +25,10 @@
 //! reachable by the fuzzer.
 
 use arbitrary::{Arbitrary, Unstructured};
+use common::transaction::NSSATransaction;
 use fuzz_props::arbitrary_types::ArbNSSATransaction;
 use fuzz_props::generators::arbitrary_fuzz_state;
+use fuzz_props::invariants::{NonceSnapshot, assert_nonce_increment_correctness};
 use libfuzzer_sys::fuzz_target;
 use nssa::V03State;
 
@@ -57,6 +59,15 @@ fuzz_target!(|data: &[u8]| {
 
     let state = V03State::new_with_genesis_accounts(&init_accs, vec![], 0);
 
+    // Capture nonces of all known accounts before execution so that
+    // assert_nonce_increment_correctness can verify the +1 step on success.
+    let nonces_before = NonceSnapshot(
+        init_accs
+            .iter()
+            .map(|&(id, _)| (id, state.get_account_by_id(id).nonce))
+            .collect(),
+    );
+
     // validate_on_state borrows `tx` and `state` — does NOT mutate state.
     let validate_result = tx.validate_on_state(&state, 1, 0);
 
@@ -66,7 +77,7 @@ fuzz_target!(|data: &[u8]| {
 
     // INVARIANT 1: both must agree on success vs failure.
     match (validate_result, execute_result) {
-        (Ok(diff), Ok(_)) => {
+        (Ok(diff), Ok(applied_tx)) => {
             let public_diff = diff.public_diff();
 
             // INVARIANT 2a (forward): every account in the diff matches the post-execute state.
@@ -143,6 +154,28 @@ fuzz_target!(|data: &[u8]| {
                 "INVARIANT VIOLATION: total balance of known accounts changed after successful \
                  transaction (possible double-credit or token-inflation bug)",
             );
+
+            // INVARIANT 4 (nonce increment correctness): every signer's nonce must
+            // have advanced by exactly one.  This is orthogonal to the balance and
+            // consistency checks above: it catches bugs where validate_on_state and
+            // execute_check_on_state agree (passing INVARIANT 1) but both increment
+            // the wrong account's nonce, or skip the increment entirely.
+            let signer_ids: Vec<nssa::AccountId> = match &applied_tx {
+                NSSATransaction::Public(t) => t
+                    .witness_set()
+                    .signatures_and_public_keys()
+                    .iter()
+                    .map(|(_, pk)| nssa::AccountId::from(pk))
+                    .collect(),
+                NSSATransaction::PrivacyPreserving(t) => t
+                    .witness_set()
+                    .signatures_and_public_keys()
+                    .iter()
+                    .map(|(_, pk)| nssa::AccountId::from(pk))
+                    .collect(),
+                NSSATransaction::ProgramDeployment(_) => vec![],
+            };
+            assert_nonce_increment_correctness(&signer_ids, &nonces_before, &exec_state);
         }
         (Err(_), Err(_)) => {
             // Both failed — correct.

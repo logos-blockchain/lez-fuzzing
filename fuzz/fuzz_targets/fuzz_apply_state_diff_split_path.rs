@@ -33,8 +33,10 @@
 use std::collections::HashSet;
 
 use arbitrary::{Arbitrary, Unstructured};
+use common::transaction::NSSATransaction;
 use fuzz_props::arbitrary_types::ArbNSSATransaction;
 use fuzz_props::generators::arbitrary_fuzz_state;
+use fuzz_props::invariants::{NonceSnapshot, assert_nonce_increment_correctness};
 use libfuzzer_sys::fuzz_target;
 use nssa::V03State;
 
@@ -72,6 +74,31 @@ fuzz_target!(|data: &[u8]| {
         return;
     };
 
+    // ── Extract signer IDs and capture nonce snapshot before apply ────────────
+    // Signer IDs are private to ValidatedStateDiff; derive them from the transaction's
+    // witness set before the diff is consumed by apply_state_diff.
+    let signer_ids: Vec<nssa::AccountId> = match &tx {
+        NSSATransaction::Public(pub_tx) => pub_tx
+            .witness_set()
+            .signatures_and_public_keys()
+            .iter()
+            .map(|(_, pk)| nssa::AccountId::from(pk))
+            .collect(),
+        NSSATransaction::PrivacyPreserving(pp_tx) => pp_tx
+            .witness_set()
+            .signatures_and_public_keys()
+            .iter()
+            .map(|(_, pk)| nssa::AccountId::from(pk))
+            .collect(),
+        NSSATransaction::ProgramDeployment(_) => vec![],
+    };
+    let nonces_before = NonceSnapshot(
+        signer_ids
+            .iter()
+            .map(|&id| (id, state.get_account_by_id(id).nonce))
+            .collect(),
+    );
+
     // Capture the IDs declared in the diff before consuming it in apply_state_diff.
     let diff_account_ids: Vec<nssa::AccountId> =
         diff.public_diff().keys().copied().collect();
@@ -79,6 +106,11 @@ fuzz_target!(|data: &[u8]| {
     // Apply the validated diff to a clone of the original state.
     let mut split_state = state.clone();
     split_state.apply_state_diff(diff);
+
+    // ── Standalone invariant: NonceIncrementCorrectness (split path) ──────────
+    // Asserts that every signer account's nonce was incremented by exactly one,
+    // catching bugs in the two-step apply_state_diff nonce-increment logic.
+    assert_nonce_increment_correctness(&signer_ids, &nonces_before, &split_state);
 
     // ── Direct path: execute_check_on_state ───────────────────────────────────
     // This consumes `tx`; it must succeed because validate_on_state already did.

@@ -180,6 +180,33 @@ impl ProtocolInvariant for ReplayRejection {
     }
 }
 
+/// A successfully applied transaction must increment the nonce of every signer account
+/// by exactly one.
+///
+/// # Note
+///
+/// This invariant **cannot** be exercised through [`InvariantCtx`] alone because
+/// `InvariantCtx` does not carry a signer-ID list — that information is private to the
+/// `nssa` crate and is consumed by `apply_state_diff` before it returns.  The
+/// `ProtocolInvariant` impl here is a registry placeholder only; it always returns `None`.
+///
+/// Use the standalone [`assert_nonce_increment_correctness`] function instead, passing
+/// the signer IDs derived from the transaction's witness set, the [`NonceSnapshot`]
+/// captured before execution, and the post-execution state.
+pub struct NonceIncrementCorrectness;
+
+impl ProtocolInvariant for NonceIncrementCorrectness {
+    fn name(&self) -> &'static str {
+        "NonceIncrementCorrectness"
+    }
+
+    fn check(&self, _ctx: &InvariantCtx<'_>) -> Option<InvariantViolation> {
+        // NonceIncrementCorrectness requires explicit signer_ids not available in InvariantCtx.
+        // Use `assert_nonce_increment_correctness(signer_ids, nonces_before, state_after)` instead.
+        None
+    }
+}
+
 // ── Standalone helpers ────────────────────────────────────────────────────────
 
 /// Assert that a successfully-applied transaction is **rejected** when replayed.
@@ -220,6 +247,70 @@ pub fn assert_replay_rejection(
     );
 }
 
+/// Assert that every signer account's nonce was incremented by exactly one after a
+/// successfully applied transaction.
+///
+/// Call this immediately after `apply_state_diff` (or `execute_check_on_state`) succeeds,
+/// passing the signer IDs derived from the transaction's witness set, the [`NonceSnapshot`]
+/// captured **before** execution, and the post-execution state.
+///
+/// For a `NSSATransaction::Public(tx)`, derive signer IDs as:
+///
+/// ```rust,ignore
+/// let signer_ids: Vec<nssa::AccountId> = tx
+///     .witness_set()
+///     .signatures_and_public_keys()
+///     .iter()
+///     .map(|(_, pk)| nssa::AccountId::from(pk))
+///     .collect();
+/// ```
+///
+/// For `NSSATransaction::ProgramDeployment`, there are no signers; pass an empty slice.
+///
+/// # Why a standalone function?
+///
+/// `apply_state_diff` consumes the `ValidatedStateDiff`, whose `signer_account_ids` field
+/// is private to the `nssa` crate.  The caller must therefore derive signer IDs from the
+/// transaction's witness set before consuming the diff, and thread them into this helper.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let signer_ids = /* derived from tx.witness_set() */;
+/// let nonces_before = NonceSnapshot(
+///     signer_ids.iter().map(|&id| (id, state.get_account_by_id(id).nonce)).collect(),
+/// );
+/// state.apply_state_diff(diff);
+/// assert_nonce_increment_correctness(&signer_ids, &nonces_before, &state);
+/// ```
+pub fn assert_nonce_increment_correctness(
+    signer_ids: &[nssa::AccountId],
+    nonces_before: &NonceSnapshot,
+    state_after: &V03State,
+) {
+    for &id in signer_ids {
+        let nonce_before = match nonces_before.0.get(&id) {
+            Some(n) => *n,
+            None => continue, // Account not in snapshot (e.g. newly created); skip.
+        };
+        let nonce_after = state_after.get_account_by_id(id).nonce;
+        let expected = Nonce(
+            nonce_before
+                .0
+                .checked_add(1)
+                .expect("nonce overflow — signer nonce at u128::MAX"),
+        );
+        assert_eq!(
+            nonce_after, expected,
+            "INVARIANT VIOLATION [NonceIncrementCorrectness]: signer account {:?} nonce \
+             not incremented by 1 after successful transaction \
+             — before={:?}, expected={:?}, got={:?} \
+             (apply_state_diff failed to increment nonce exactly once)",
+            id, nonce_before, expected, nonce_after,
+        );
+    }
+}
+
 // ── Dispatcher ───────────────────────────────────────────────────────────────
 
 /// Run every registered [`ProtocolInvariant`] and panic with a structured message
@@ -230,12 +321,14 @@ pub fn assert_replay_rejection(
 /// - [`BalanceConservation`] — total balance conserved on success
 /// - [`FailedTxNonceStability`] — nonces unchanged on rejection
 /// - [`ReplayRejection`] — stub only; use [`assert_replay_rejection`] directly
+/// - [`NonceIncrementCorrectness`] — stub only; use [`assert_nonce_increment_correctness`] directly
 pub fn assert_invariants(ctx: &InvariantCtx<'_>) {
     let invariants: &[&dyn ProtocolInvariant] = &[
         &StateIsolationOnFailure,
         &BalanceConservation,
         &FailedTxNonceStability,
         &ReplayRejection,
+        &NonceIncrementCorrectness,
     ];
     for inv in invariants {
         if let Some(violation) = inv.check(ctx) {
@@ -314,6 +407,38 @@ mod tests {
 
         let result = std::panic::catch_unwind(|| assert_invariants(&ctx));
         assert!(result.is_err(), "expected panic for balance inflation");
+    }
+
+    #[test]
+    fn nonce_increment_correctness_passes_with_no_signers() {
+        // Empty signer list — no accounts to check; trivially satisfies the invariant.
+        let state = make_empty_state();
+        assert_nonce_increment_correctness(&[], &make_empty_nonce_snapshot(), &state);
+    }
+
+    #[test]
+    fn nonce_increment_correctness_passes_when_signer_not_in_snapshot() {
+        // Signer ID is present in the list but absent from the snapshot — skipped.
+        let acc_id = nssa::AccountId::new([9u8; 32]);
+        let state = make_empty_state();
+        // Empty snapshot → `continue` branch fires; no assertion is made.
+        assert_nonce_increment_correctness(&[acc_id], &make_empty_nonce_snapshot(), &state);
+    }
+
+    #[test]
+    fn nonce_increment_correctness_catches_unchanged_nonce() {
+        // Arrange: signer has nonce 5 in the snapshot; the state returns Nonce(0) for the
+        // same account (genesis default).  expected = Nonce(6), actual = Nonce(0) → VIOLATION.
+        let acc_id = nssa::AccountId::new([3u8; 32]);
+        let state = V03State::new_with_genesis_accounts(&[], vec![], 0);
+
+        let mut nonces = std::collections::HashMap::new();
+        nonces.insert(acc_id, Nonce(5));
+
+        let result = std::panic::catch_unwind(|| {
+            assert_nonce_increment_correctness(&[acc_id], &NonceSnapshot(nonces), &state);
+        });
+        assert!(result.is_err(), "expected panic for unchanged nonce");
     }
 
     #[test]

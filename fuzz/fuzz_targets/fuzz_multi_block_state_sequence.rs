@@ -35,9 +35,11 @@
 //!    the total; only mint/burn bugs or token-inflation bugs would break it.
 
 use arbitrary::{Arbitrary, Unstructured};
+use common::transaction::NSSATransaction;
 use fuzz_props::generators::{arb_fuzz_native_transfer, arbitrary_fuzz_state, arbitrary_transaction};
 use fuzz_props::invariants::{
-    BalanceSnapshot, InvariantCtx, NonceSnapshot, assert_invariants, assert_replay_rejection,
+    BalanceSnapshot, InvariantCtx, NonceSnapshot, assert_invariants, assert_nonce_increment_correctness,
+    assert_replay_rejection,
 };
 use libfuzzer_sys::fuzz_target;
 use nssa::V03State;
@@ -111,13 +113,29 @@ fuzz_target!(|data: &[u8]| {
             state_after: &state,
             execution_succeeded,
             balances_before,
-            nonces_before,
+            nonces_before: nonces_before.clone(),
         });
 
-        // ── ReplayRejection (per-block) ───────────────────────────────────────
-        // execute_check_on_state returns the NSSATransaction on Ok; replay it
-        // immediately in the next block and assert it is rejected (nonce consumed).
+        // ── NonceIncrementCorrectness + ReplayRejection (per-block) ──────────
+        // First verify every signer's nonce was incremented by exactly one, then
+        // replay in the next block to confirm the nonce is permanently consumed.
         if let Ok(applied_tx) = result {
+            let signer_ids: Vec<nssa::AccountId> = match &applied_tx {
+                NSSATransaction::Public(t) => t
+                    .witness_set()
+                    .signatures_and_public_keys()
+                    .iter()
+                    .map(|(_, pk)| nssa::AccountId::from(pk))
+                    .collect(),
+                NSSATransaction::PrivacyPreserving(t) => t
+                    .witness_set()
+                    .signatures_and_public_keys()
+                    .iter()
+                    .map(|(_, pk)| nssa::AccountId::from(pk))
+                    .collect(),
+                NSSATransaction::ProgramDeployment(_) => vec![],
+            };
+            assert_nonce_increment_correctness(&signer_ids, &nonces_before, &state);
             assert_replay_rejection(applied_tx, &mut state, block_id + 1, timestamp + 1);
         }
     }

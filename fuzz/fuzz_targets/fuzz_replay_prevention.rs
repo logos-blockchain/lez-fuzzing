@@ -23,9 +23,11 @@
 //! - **ReplayRejection** — accepted tx rejected on replay
 
 use arbitrary::{Arbitrary, Unstructured};
+use common::transaction::NSSATransaction;
 use fuzz_props::generators::{arb_fuzz_native_transfer, arbitrary_fuzz_state, arbitrary_transaction};
 use fuzz_props::invariants::{
-    BalanceSnapshot, InvariantCtx, NonceSnapshot, assert_invariants, assert_replay_rejection,
+    BalanceSnapshot, InvariantCtx, NonceSnapshot, assert_invariants, assert_nonce_increment_correctness,
+    assert_replay_rejection,
 };
 use libfuzzer_sys::fuzz_target;
 use nssa::V03State;
@@ -87,13 +89,29 @@ fuzz_target!(|data: &[u8]| {
         state_after: &state,
         execution_succeeded,
         balances_before,
-        nonces_before,
+        nonces_before: nonces_before.clone(),
     });
 
-    // ── ReplayRejection ───────────────────────────────────────────────────────
-    // tx is returned on success; assert that applying it again in the next block
-    // is rejected (nonce was consumed on first acceptance).
+    // ── NonceIncrementCorrectness + ReplayRejection ───────────────────────────
+    // First verify every signer's nonce was incremented by exactly one, then
+    // assert that replaying in the next block is rejected (nonce permanently consumed).
     if let Ok(applied_tx) = result {
+        let signer_ids: Vec<nssa::AccountId> = match &applied_tx {
+            NSSATransaction::Public(t) => t
+                .witness_set()
+                .signatures_and_public_keys()
+                .iter()
+                .map(|(_, pk)| nssa::AccountId::from(pk))
+                .collect(),
+            NSSATransaction::PrivacyPreserving(t) => t
+                .witness_set()
+                .signatures_and_public_keys()
+                .iter()
+                .map(|(_, pk)| nssa::AccountId::from(pk))
+                .collect(),
+            NSSATransaction::ProgramDeployment(_) => vec![],
+        };
+        assert_nonce_increment_correctness(&signer_ids, &nonces_before, &state);
         assert_replay_rejection(applied_tx, &mut state, 2, 1);
     }
 });
