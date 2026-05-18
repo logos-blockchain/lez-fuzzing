@@ -17,23 +17,28 @@
 //!
 //! # Invariants
 //!
+//! The following per-transaction invariants are checked via the shared framework
+//! ([`fuzz_props::invariants::assert_invariants`]) on every iteration:
+//!
+//! - **StateIsolationOnFailure** — balances unchanged on rejection.
+//! - **BalanceConservation** — total balance conserved on success.
+//! - **FailedTxNonceStability** — nonces unchanged on rejection.
+//!
+//! In addition, [`assert_replay_rejection`] is called on every successful
+//! transaction (per-block replay check).
+//!
+//! The following multi-block aggregate invariant is checked **after** the loop:
+//!
 //! 1. **LongRangeBalanceConservation** — the total balance of the original genesis
 //!    accounts is the same at the end of all N blocks as at the beginning.  Failed
 //!    transactions and successful transfers between genesis accounts both preserve
 //!    the total; only mint/burn bugs or token-inflation bugs would break it.
-//!
-//! 2. **FailedTxNonceStability** — when `execute_check_on_state` returns `Err` for
-//!    a transaction, every genesis account nonce must be identical to what it was
-//!    before that transaction was attempted.  Nonce mutations on failed txs would
-//!    allow a griefing attack that permanently burns the victim's account.
-//!
-//! 3. **PerBlockReplayRejection** — every transaction that succeeded in block B is
-//!    rejected when replayed in block B+1.  This is the same per-tx invariant as
-//!    in `fuzz_state_transition` but exercised cumulatively across a longer
-//!    sequence so that interactions between successive nonce increments are tested.
 
 use arbitrary::{Arbitrary, Unstructured};
 use fuzz_props::generators::{arb_fuzz_native_transfer, arbitrary_fuzz_state, arbitrary_transaction};
+use fuzz_props::invariants::{
+    BalanceSnapshot, InvariantCtx, NonceSnapshot, assert_invariants, assert_replay_rejection,
+};
 use libfuzzer_sys::fuzz_target;
 use nssa::V03State;
 
@@ -52,7 +57,7 @@ fuzz_target!(|data: &[u8]| {
 
     let mut state = V03State::new_with_genesis_accounts(&init_accs, vec![], 0);
 
-    // Record starting balances for the long-range conservation check (invariant 1).
+    // Record starting balances for the long-range conservation check.
     let starting_total: u128 = init_accs
         .iter()
         .map(|&(id, _)| state.get_account_by_id(id).balance)
@@ -78,57 +83,51 @@ fuzz_target!(|data: &[u8]| {
         let block_id: u64 = 1 + u64::from(i);
         let timestamp: u64 = u64::from(i) * 1000;
 
-        // Snapshot nonces before this transaction for the nonce-stability check.
-        let nonces_before: Vec<nssa_core::account::Nonce> = init_accs
-            .iter()
-            .map(|&(id, _)| state.get_account_by_id(id).nonce)
-            .collect();
+        // Build per-transaction snapshots for the shared invariant framework.
+        let balances_before = BalanceSnapshot(
+            init_accs
+                .iter()
+                .map(|&(id, _)| (id, state.get_account_by_id(id).balance))
+                .collect(),
+        );
+        let nonces_before = NonceSnapshot(
+            init_accs
+                .iter()
+                .map(|&(id, _)| (id, state.get_account_by_id(id).nonce))
+                .collect(),
+        );
+        let state_snapshot = state.clone();
 
         let result = tx.execute_check_on_state(&mut state, block_id, timestamp);
+        let execution_succeeded = result.is_ok();
 
-        match result {
-            Err(_) => {
-                // ── Invariant 2: FailedTxNonceStability ──────────────────────
-                for (k, &(acc_id, _)) in init_accs.iter().enumerate() {
-                    let nonce_after = state.get_account_by_id(acc_id).nonce;
-                    assert_eq!(
-                        nonces_before[k],
-                        nonce_after,
-                        "INVARIANT VIOLATION [FailedTxNonceStability]: \
-                         nonce changed for account {:?} after a REJECTED transaction \
-                         in block {} (nonce before={:?}, nonce after={:?})",
-                        acc_id,
-                        block_id,
-                        nonces_before[k],
-                        nonce_after,
-                    );
-                }
-            }
-            Ok(applied_tx) => {
-                // ── Invariant 3: PerBlockReplayRejection ─────────────────────
-                let replay_result = applied_tx.execute_check_on_state(
-                    &mut state,
-                    block_id + 1,
-                    timestamp + 1,
-                );
-                assert!(
-                    replay_result.is_err(),
-                    "INVARIANT VIOLATION [PerBlockReplayRejection]: \
-                     a transaction accepted in block {} was accepted again in block {} \
-                     — nonce was not consumed",
-                    block_id,
-                    block_id + 1,
-                );
-            }
+        // ── Shared invariant checks ───────────────────────────────────────────
+        // Asserts per-transaction:
+        //   • StateIsolationOnFailure  — balances unchanged on rejection
+        //   • BalanceConservation      — total balance conserved on success
+        //   • FailedTxNonceStability   — nonces unchanged on rejection
+        assert_invariants(&InvariantCtx {
+            state_before: &state_snapshot,
+            state_after: &state,
+            execution_succeeded,
+            balances_before,
+            nonces_before,
+        });
+
+        // ── ReplayRejection (per-block) ───────────────────────────────────────
+        // execute_check_on_state returns the NSSATransaction on Ok; replay it
+        // immediately in the next block and assert it is rejected (nonce consumed).
+        if let Ok(applied_tx) = result {
+            assert_replay_rejection(applied_tx, &mut state, block_id + 1, timestamp + 1);
         }
     }
 
-    // ── Invariant 1: LongRangeBalanceConservation ─────────────────────────────
+    // ── LongRangeBalanceConservation ──────────────────────────────────────────
     // After all N blocks, the total balance of genesis accounts must equal the
     // starting total.  Successful transfers between genesis accounts cancel out;
-    // failed transactions must not mutate balances (covered by
-    // fuzz_state_transition's StateIsolationOnFailure, but we also verify the
-    // cumulative result here to catch interactions).
+    // failed transactions must not mutate balances (covered per-tx by
+    // StateIsolationOnFailure above, verified cumulatively here to catch
+    // interactions across the full sequence).
     let ending_total: u128 = init_accs
         .iter()
         .map(|&(id, _)| state.get_account_by_id(id).balance)

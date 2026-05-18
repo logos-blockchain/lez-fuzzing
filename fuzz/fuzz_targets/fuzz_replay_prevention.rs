@@ -11,9 +11,22 @@
 //! testnet genesis) so that nonce-dependent edge cases — e.g. replay prevention
 //! at nonce 0, nonce `u128::MAX`, or when the sender has zero balance — are
 //! reachable by the fuzzer.
+//!
+//! # Invariants checked
+//!
+//! The shared framework ([`assert_invariants`]) enforces per-transaction:
+//! - **StateIsolationOnFailure** — balances unchanged on rejection
+//! - **BalanceConservation** — total balance conserved on success
+//! - **FailedTxNonceStability** — nonces unchanged on rejection
+//!
+//! The dedicated [`assert_replay_rejection`] function enforces:
+//! - **ReplayRejection** — accepted tx rejected on replay
 
 use arbitrary::{Arbitrary, Unstructured};
 use fuzz_props::generators::{arb_fuzz_native_transfer, arbitrary_fuzz_state, arbitrary_transaction};
+use fuzz_props::invariants::{
+    BalanceSnapshot, InvariantCtx, NonceSnapshot, assert_invariants, assert_replay_rejection,
+};
 use libfuzzer_sys::fuzz_target;
 use nssa::V03State;
 
@@ -45,15 +58,42 @@ fuzz_target!(|data: &[u8]| {
     // Stateless gate: skip structurally malformed transactions.
     let Ok(tx) = tx.transaction_stateless_check() else { return; };
 
+    // Build snapshots before execution.
+    let balances_before = BalanceSnapshot(
+        init_accs
+            .iter()
+            .map(|&(id, _)| (id, state.get_account_by_id(id).balance))
+            .collect(),
+    );
+    let nonces_before = NonceSnapshot(
+        init_accs
+            .iter()
+            .map(|&(id, _)| (id, state.get_account_by_id(id).nonce))
+            .collect(),
+    );
+    let state_snapshot = state.clone();
+
     // First application — may legitimately fail for state-level reasons.
     let result = tx.execute_check_on_state(&mut state, 1, 0);
+    let execution_succeeded = result.is_ok();
 
-    if let Ok(tx) = result {
-        // tx is returned on success; try applying the identical transaction again.
-        let result2 = tx.execute_check_on_state(&mut state, 2, 1);
-        assert!(
-            result2.is_err(),
-            "INVARIANT VIOLATION: transaction accepted a second time — nonce replay not prevented"
-        );
+    // ── Shared invariant checks ───────────────────────────────────────────────
+    // Asserts:
+    //   • StateIsolationOnFailure  — balances unchanged on rejection
+    //   • BalanceConservation      — total balance conserved on success
+    //   • FailedTxNonceStability   — nonces unchanged on rejection
+    assert_invariants(&InvariantCtx {
+        state_before: &state_snapshot,
+        state_after: &state,
+        execution_succeeded,
+        balances_before,
+        nonces_before,
+    });
+
+    // ── ReplayRejection ───────────────────────────────────────────────────────
+    // tx is returned on success; assert that applying it again in the next block
+    // is rejected (nonce was consumed on first acceptance).
+    if let Ok(applied_tx) = result {
+        assert_replay_rejection(applied_tx, &mut state, 2, 1);
     }
 });

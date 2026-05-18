@@ -2,6 +2,9 @@
 
 use arbitrary::{Arbitrary, Unstructured};
 use fuzz_props::generators::{arb_fuzz_native_transfer, arbitrary_fuzz_state, arbitrary_transaction};
+use fuzz_props::invariants::{
+    BalanceSnapshot, InvariantCtx, NonceSnapshot, assert_invariants, assert_replay_rejection,
+};
 use libfuzzer_sys::fuzz_target;
 use nssa::V03State;
 
@@ -45,8 +48,20 @@ fuzz_target!(|data: &[u8]| {
             continue;
         };
 
-        // Clone state before to detect state leakage on failure
-        let state_snapshot = state.clone();
+        // Build snapshots from the live state before this transaction so that the
+        // shared invariant framework can check isolation and conservation.
+        let balances_before = BalanceSnapshot(
+            init_accs
+                .iter()
+                .map(|&(id, _)| (id, state.get_account_by_id(id).balance))
+                .collect(),
+        );
+        let nonces_before = NonceSnapshot(
+            init_accs
+                .iter()
+                .map(|&(id, _)| (id, state.get_account_by_id(id).nonce))
+                .collect(),
+        );
 
         // Advance block_id and timestamp each iteration so the state machine
         // sees a realistic monotonically-increasing context.  Using the same
@@ -54,61 +69,30 @@ fuzz_target!(|data: &[u8]| {
         // when the block context changes across a multi-transaction sequence.
         let block_id: u64 = 1 + u64::from(i);
         let timestamp: u64 = u64::from(i);
+
+        // Snapshot state before execution for isolation checks.
+        let state_snapshot = state.clone();
         let result = tx.execute_check_on_state(&mut state, block_id, timestamp);
+        let execution_succeeded = result.is_ok();
 
-        match result {
-            Err(_) => {
-                // INVARIANT: StateIsolationOnFailure — a rejected tx must leave
-                // public account balances unchanged.
-                for &(acc_id, _) in &init_accs {
-                    let bal_before = state_snapshot.get_account_by_id(acc_id).balance;
-                    let bal_after = state.get_account_by_id(acc_id).balance;
-                    assert_eq!(
-                        bal_before, bal_after,
-                        "INVARIANT VIOLATION [StateIsolationOnFailure]: balance changed \
-                         despite tx rejection for account {:?}",
-                        acc_id
-                    );
-                }
-            }
-            Ok(applied_tx) => {
-                // INVARIANT: BalanceConservation — total balance of known accounts
-                // must be conserved on success.  Catches double-credit and
-                // token-inflation bugs — two transfer paths that each credit the
-                // recipient without debiting the sender would inflate the total, but
-                // neither the rejection check nor any other per-account check catches
-                // it unless we compare the aggregate.
-                let total_before: u128 = init_accs
-                    .iter()
-                    .map(|&(acc_id, _)| state_snapshot.get_account_by_id(acc_id).balance)
-                    .fold(0u128, u128::saturating_add);
-                let total_after: u128 = init_accs
-                    .iter()
-                    .map(|&(acc_id, _)| state.get_account_by_id(acc_id).balance)
-                    .fold(0u128, u128::saturating_add);
-                assert_eq!(
-                    total_before,
-                    total_after,
-                    "INVARIANT VIOLATION [BalanceConservation]: total balance of genesis \
-                     accounts changed after successful transaction (double-credit / \
-                     token-inflation bug)",
-                );
+        // ── Shared invariant checks ───────────────────────────────────────────
+        // Asserts:
+        //   • StateIsolationOnFailure  — balances unchanged on rejection
+        //   • BalanceConservation      — total balance conserved on success
+        //   • FailedTxNonceStability   — nonces unchanged on rejection
+        assert_invariants(&InvariantCtx {
+            state_before: &state_snapshot,
+            state_after: &state,
+            execution_succeeded,
+            balances_before,
+            nonces_before,
+        });
 
-                // INVARIANT: ReplayRejection — the nonce is consumed on first
-                // acceptance; replaying the identical transaction in the very next
-                // block must be rejected.
-                // `execute_check_on_state` returns the `ValidatedTransaction` on
-                // success, so we can feed it back without re-validating.
-                let replay_result =
-                    applied_tx.execute_check_on_state(&mut state, block_id + 1, timestamp + 1);
-                assert!(
-                    replay_result.is_err(),
-                    "INVARIANT VIOLATION [ReplayRejection]: transaction accepted twice — \
-                     nonce replay not prevented (first block_id={block_id}, replay \
-                     block_id={})",
-                    block_id + 1,
-                );
-            }
+        // ── ReplayRejection ───────────────────────────────────────────────────
+        // execute_check_on_state returns the NSSATransaction on Ok; replay it
+        // immediately in the next block and assert it is rejected.
+        if let Ok(applied_tx) = result {
+            assert_replay_rejection(applied_tx, &mut state, block_id + 1, timestamp + 1);
         }
     }
 });
