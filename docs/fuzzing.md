@@ -219,22 +219,33 @@ Concrete invariants currently registered in `assert_invariants()`:
 
 | Invariant | Description | Implementation status |
 |-----------|-------------|----------------------|
-| `StateIsolationOnFailure` | Per-account balance must not change for any tracked account when a transaction is rejected | ✅ Fully implemented in `fuzz_props/src/invariants.rs` |
-| `ReplayRejection` | An accepted transaction must be rejected when replayed | ⚠️ Returns `None` from `InvariantCtx` (see note below); enforced directly in `fuzz_state_transition` and `fuzz_replay_prevention` |
+| `StateIsolationOnFailure` | Per-account balance must not change for any tracked account when a transaction is rejected | ✅ Fully implemented |
+| `BalanceConservation` | Total balance of all known accounts must be conserved when a transaction succeeds | ✅ Fully implemented |
+| `FailedTxNonceStability` | Every account's nonce must remain unchanged when a transaction is rejected | ✅ Fully implemented |
+| `ReplayRejection` | An accepted transaction must be rejected when replayed | ⚠️ Registry stub — always returns `None` from `InvariantCtx`; use `assert_replay_rejection()` directly (see note below) |
+| `NonceIncrementCorrectness` | Every signer account's nonce must be incremented by exactly one after a successful transaction | ⚠️ Registry stub — always returns `None` from `InvariantCtx`; use `assert_nonce_increment_correctness()` directly (see note below) |
 
-> **Note on `ReplayRejection`:** The check cannot be fully exercised through `InvariantCtx`
-> because it requires re-applying the `ValidatedTransaction` returned on `Ok` by
-> `execute_check_on_state` — which consumes `self` — to the post-execution state.  The
-> invariant is enforced in two complementary ways: (1) `fuzz_state_transition.rs` replays
-> every accepted transaction in the next block and asserts rejection; (2) the proptest suite
-> `replay_rejection_proptest` in `fuzz_props/src/invariants.rs` exercises the same property
-> with reproducible structured inputs.
+> **Note on stub invariants:** `ReplayRejection` and `NonceIncrementCorrectness` cannot be
+> fully exercised through `InvariantCtx` alone.  Each requires information that is consumed
+> before `InvariantCtx` is built:
+>
+> - **`ReplayRejection`**: `execute_check_on_state` returns the `NSSATransaction` on `Ok`,
+>   consuming `self`.  Replaying it requires re-applying the returned transaction to the
+>   post-execution state — not possible via a shared `&InvariantCtx`.  Use the standalone
+>   `assert_replay_rejection(applied_tx, state, next_block_id, next_timestamp)` helper
+>   immediately after each successful execution.  The proptest suite `replay_rejection_proptest`
+>   in `fuzz_props/src/invariants.rs` provides reproducible structured coverage of this
+>   invariant.
+>
+> - **`NonceIncrementCorrectness`**: `apply_state_diff` consumes the `ValidatedStateDiff`
+>   whose signer-account list is private to the `nssa` crate.  The caller must derive signer
+>   IDs from the transaction's witness set before consuming the diff, then call the standalone
+>   `assert_nonce_increment_correctness(signer_ids, nonces_before, state_after)` helper.
 
 Additional invariants enforced **inline** in specific targets (not via `ProtocolInvariant`):
 
 | Invariant | Targets |
 |-----------|---------|
-| `BalanceConservation` | `fuzz_state_transition`, `fuzz_validate_execute_consistency` |
 | `HashRoundTrip` / `HashPreimage` / `TxOrderCommitment` | `fuzz_block_verification` |
 | Diff forward containment / reverse completeness | `fuzz_state_diff_computation` |
 
