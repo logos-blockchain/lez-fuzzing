@@ -30,6 +30,12 @@ jobs:
           - fuzz_replay_prevention
           - fuzz_state_diff_computation
           - fuzz_validate_execute_consistency
+          - fuzz_state_serialization
+          - fuzz_witness_set_verification
+          - fuzz_program_deployment_lifecycle
+          - fuzz_apply_state_diff_split_path
+          - fuzz_multi_block_state_sequence
+          - fuzz_sequencer_vs_replayer
     steps:
       - uses: actions/checkout@v4
 
@@ -96,6 +102,12 @@ jobs:
           - fuzz_replay_prevention
           - fuzz_state_diff_computation
           - fuzz_validate_execute_consistency
+          - fuzz_state_serialization
+          - fuzz_witness_set_verification
+          - fuzz_program_deployment_lifecycle
+          - fuzz_apply_state_diff_split_path
+          - fuzz_multi_block_state_sequence
+          - fuzz_sequencer_vs_replayer
     steps:
       - uses: actions/checkout@v4
       - name: Checkout logos-execution-zone alongside lez-fuzzing
@@ -171,7 +183,13 @@ jobs:
             fuzz_signature_verification \
             fuzz_replay_prevention \
             fuzz_state_diff_computation \
-            fuzz_validate_execute_consistency; do
+            fuzz_validate_execute_consistency \
+            fuzz_state_serialization \
+            fuzz_witness_set_verification \
+            fuzz_program_deployment_lifecycle \
+            fuzz_apply_state_diff_split_path \
+            fuzz_multi_block_state_sequence \
+            fuzz_sequencer_vs_replayer; do
             echo "=== $target ===" | tee -a perf_baseline.txt
             cargo fuzz run "$target" -- -max_total_time=30 2>&1 \
               | grep -E "exec/s|execs_per_sec" | tail -1 | tee -a perf_baseline.txt

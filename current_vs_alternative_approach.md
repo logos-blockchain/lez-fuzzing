@@ -11,7 +11,7 @@ The `lez-fuzzing` repository is a **coverage-guided, structured mutation fuzzing
 | Rich generators | [`fuzz_props::generators`](fuzz_props/src/generators.rs) adds `proptest` strategies for pathological sequences, phantom-account attacks, overflow amounts, replay sequences |
 | Protocol invariants | [`fuzz_props::invariants`](fuzz_props/src/invariants.rs) expresses zero-mutation-on-rejection and replay-rejection as reusable `ProtocolInvariant` objects |
 | ZK-awareness | `RISC0_DEV_MODE=1` stubs out `risc0-zkvm` proofs, enabling ~5 000–200 000 exec/sec depending on target |
-| 14 dedicated targets | Covers encoding, signature verification, stateless checks, state transitions, state diffs, replay prevention, validate/execute consistency, block verification, state serialization, witness-set verification, program deployment lifecycle, split-path equivalence, multi-block sequences |
+| 15 dedicated targets | Covers encoding, signature verification, stateless checks, state transitions, state diffs, replay prevention, validate/execute consistency, block verification, state serialization, witness-set verification, program deployment lifecycle, split-path equivalence, multi-block sequences, sequencer-vs-replayer differential |
 | CI integration | GitHub Actions smoke, regression, and performance-baseline jobs run on every PR |
 | Pre-seeded corpus | Hundreds of minimised seed files in [`fuzz/corpus/`](fuzz/corpus/) ensure regressions are caught instantly |
 
@@ -82,7 +82,7 @@ The extension noted in [`docs/fuzzing.md`](docs/fuzzing.md:356) is:
 | Implementation cost | High (replayer in scope) | Low |
 | Value for protocol correctness | Very high | High |
 
-**Decision-maker view**: This is the **highest-value extension** to the current project. The `fuzz_validate_execute_consistency` target proves the pattern works. A sequencer-vs-replayer target would catch consensus-breaking state root divergence — a class of bug no single-oracle target can detect. Estimated cost: 1–2 engineer-weeks.
+**Decision-maker view**: ✅ **Implemented** as [`fuzz_sequencer_vs_replayer`](fuzz/fuzz_targets/fuzz_sequencer_vs_replayer.rs). The target feeds up to 8 transactions through the sequencer path (`validate_on_state` → `apply_state_diff`) and the replayer path (`execute_check_on_state`) with the same initial state and block context, then asserts **SequencerReplayerEquivalence** (identical balance, nonce, data, and program_owner for all known accounts), **ReplayerAcceptsAllSequencerTxs** (replayer must accept every transaction the sequencer accepted), and **ClockConsistency** (mandatory clock invocation must succeed and leave both states identical). This catches the consensus-breaking divergence class — a state root difference between sequencer and replayer — that no single-oracle target can detect.
 
 ---
 
@@ -123,7 +123,7 @@ The extension noted in [`docs/fuzzing.md`](docs/fuzzing.md:356) is:
 | AFL++ | High (different bugs) | Medium | Low | ✅ Yes | Add `just fuzz-afl` (already planned) |
 | Honggfuzz | High on Linux | Medium | Medium | ✅ Yes | Add for Linux CI only |
 | proptest-only | Low–medium | Low | ✅ Done | Already present | Keep as unit-test layer |
-| Differential (sequencer/replayer) | Very high (new bug class) | Medium | Medium–high | ✅ Yes | **Priority extension** |
+| Differential (sequencer/replayer) | Very high (new bug class) | Medium | ✅ Done | ✅ Yes | ✅ Implemented (`fuzz_sequencer_vs_replayer`) |
 | Formal verification | Exhaustive (selected invariants) | Very high | Very high | ✅ Yes | Long-term supplement |
 | Mutation testing (`cargo-mutants`) | Measures assertion quality | High | Low | ✅ Yes | Pre-audit quality gate |
 
@@ -135,9 +135,9 @@ The current implementation is **well-architected and production-ready** for a pr
 
 **Highest-ROI next steps, in priority order:**
 
-1. **The invariant framework is complete for the current target set** — three invariants are fully implemented and auto-run by [`assert_invariants()`](fuzz_props/src/invariants.rs:325): [`StateIsolationOnFailure`](fuzz_props/src/invariants.rs:60), [`BalanceConservation`](fuzz_props/src/invariants.rs:94), and [`FailedTxNonceStability`](fuzz_props/src/invariants.rs:130). Two further invariants ([`ReplayRejection`](fuzz_props/src/invariants.rs:169) and [`NonceIncrementCorrectness`](fuzz_props/src/invariants.rs:196)) are registered stubs; callers use the dedicated `assert_replay_rejection` and `assert_nonce_increment_correctness` helpers directly. The next step is to audit all 14 targets to confirm every applicable invariant is wired up, then add mutation tests via `cargo-mutants`.
+1. **The invariant framework is complete for the current target set** — three invariants are fully implemented and auto-run by [`assert_invariants()`](fuzz_props/src/invariants.rs:325): [`StateIsolationOnFailure`](fuzz_props/src/invariants.rs:60), [`BalanceConservation`](fuzz_props/src/invariants.rs:94), and [`FailedTxNonceStability`](fuzz_props/src/invariants.rs:130). Two further invariants ([`ReplayRejection`](fuzz_props/src/invariants.rs:169) and [`NonceIncrementCorrectness`](fuzz_props/src/invariants.rs:196)) are registered stubs; callers use the dedicated `assert_replay_rejection` and `assert_nonce_increment_correctness` helpers directly. The next step is to audit all 15 targets to confirm every applicable invariant is wired up, then add mutation tests via `cargo-mutants`.
 
-2. **Add the sequencer-vs-replayer differential target** — highest new bug-finding value, unique to this protocol's architecture, already identified in [`docs/fuzzing.md`](docs/fuzzing.md:356).
+2. ✅ **The sequencer-vs-replayer differential target is implemented** — [`fuzz_sequencer_vs_replayer`](fuzz/fuzz_targets/fuzz_sequencer_vs_replayer.rs) catches consensus-breaking state root divergence between the sequencer and replayer pipelines, unique to this protocol's architecture.
 
 3. **Add AFL++ as a parallel fuzzing lane** (`just fuzz-afl`) — zero corpus migration cost, discovers different mutation paths through the same targets as libFuzzer.
 

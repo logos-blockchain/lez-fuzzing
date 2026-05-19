@@ -107,3 +107,9 @@ name = "fuzz_multi_block_state_sequence"
 path = "fuzz_targets/fuzz_multi_block_state_sequence.rs"
 test = false
 bench = false
+
+[[bin]]
+name = "fuzz_sequencer_vs_replayer"
+path = "fuzz_targets/fuzz_sequencer_vs_replayer.rs"
+test = false
+bench = false

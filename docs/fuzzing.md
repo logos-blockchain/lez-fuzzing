@@ -77,6 +77,7 @@ just fuzz-regression
 | `fuzz_program_deployment_lifecycle` | `V03State::transition_from_program_deployment_transaction` no-panic on arbitrary WASM bytecode (**NoPanic**); **BalanceIsolation** (successful deployment must not move tokens); **StateIsolationOnFailure** (failed deployment must not change any genesis account balance or nonce) | `fuzz/fuzz_targets/fuzz_program_deployment_lifecycle.rs` |
 | `fuzz_apply_state_diff_split_path` | **SplitPathEquivalence**: for every known account, `validate_on_state` + `apply_state_diff` must produce exactly the same balance, nonce, data, and program_owner as `execute_check_on_state`; **NonceIncrementCorrectness**: nonce after the split path equals nonce after the direct path for all signer accounts (catches bugs in the two-step `apply_state_diff` nonce-increment logic) | `fuzz/fuzz_targets/fuzz_apply_state_diff_split_path.rs` |
 | `fuzz_multi_block_state_sequence` | **LongRangeBalanceConservation**: total genesis-account balance identical before and after all N (≤ 16) blocks; **FailedTxNonceStability**: every genesis-account nonce unchanged after a rejected transaction; **PerBlockReplayRejection**: every transaction accepted in block B is rejected in block B+1 (cumulative nonce-interaction coverage) | `fuzz/fuzz_targets/fuzz_multi_block_state_sequence.rs` |
+| `fuzz_sequencer_vs_replayer` | **SequencerReplayerEquivalence**: for every known account (genesis ∪ diff-declared), the sequencer path (`validate_on_state` → `apply_state_diff`) and the replayer path (`execute_check_on_state`) must produce identical balance, nonce, data, and program_owner after applying a full block of up to 8 transactions plus the mandatory clock invocation; **ReplayerAcceptsAllSequencerTxs**: every transaction accepted by `validate_on_state` must also be accepted by `execute_check_on_state`; **ClockConsistency**: the mandatory clock invocation must succeed on both paths and leave both states identical | `fuzz/fuzz_targets/fuzz_sequencer_vs_replayer.rs` |
 
 ---
 
@@ -317,6 +318,7 @@ Measured on a 4-core x86_64 Linux runner with `RISC0_DEV_MODE=1`:
 | `fuzz_program_deployment_lifecycle` | ~4 000 exec/sec *(estimate)* |
 | `fuzz_apply_state_diff_split_path` | ~5 000 exec/sec *(estimate)* |
 | `fuzz_multi_block_state_sequence` | ~1 000 exec/sec *(estimate)* |
+| `fuzz_sequencer_vs_replayer` | ~2 000 exec/sec *(estimate)* |
 
 > Throughput figures for the five new targets are rough estimates; run `just perf-baseline`
 > locally or check the `perf-baseline` CI artifact for up-to-date measurements.
@@ -353,5 +355,5 @@ flag stubs out ZK proof generation and replaces it with a fast mock implementati
 | `PrivacyPreservingTransaction` coverage | Excluded from `fuzz_encoding_roundtrip` because its ZK receipt cannot be reconstructed in a fuzzing loop. A dedicated slow target with `RISC0_DEV_MODE=1` and `proptest` should be added after the current targets are stable |
 | `fuzz_validate_execute_consistency` new-account detection | If `execute_check_on_state` creates a brand-new account absent from both the genesis set and the diff, that state-widening will not be detected — full detection requires iterating all accounts in `V03State`, which the API does not currently expose |
 | AFL++ integration | A `just fuzz-afl` recipe can be added later; the same corpus is compatible |
-| Differential testing (sequencer vs replayer) | Add a target that feeds the same block to `SequencerCore` and `indexer_core` and asserts identical state roots |
+| Differential testing (sequencer vs replayer) | ✅ Implemented — `fuzz_sequencer_vs_replayer` feeds the same block through the sequencer path (`validate_on_state` → `apply_state_diff`) and the replayer path (`execute_check_on_state`) and asserts identical state for all known accounts |
 | LEZ version tracking | There is no submodule pin — `lez-fuzzing` reads `../logos-execution-zone` as checked out. Update that repo to a release tag or a tested commit, then run `just update-lez` (which does `git pull --ff-only`) and open a PR to bump it |
