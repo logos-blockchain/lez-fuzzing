@@ -1,16 +1,16 @@
-#![no_main]
+#![cfg_attr(feature = "fuzzer-libfuzzer", no_main)]
 
 use arbitrary::{Arbitrary, Unstructured};
-use common::transaction::NSSATransaction;
-use fuzz_props::generators::{arb_fuzz_native_transfer, arbitrary_fuzz_state, arbitrary_transaction};
-use fuzz_props::invariants::{
-    BalanceSnapshot, InvariantCtx, NonceSnapshot, assert_invariants, assert_nonce_increment_correctness,
-    assert_replay_rejection,
+use fuzz_props::generators::{
+    arb_fuzz_native_transfer, arbitrary_fuzz_state, arbitrary_transaction, signer_account_ids,
 };
-use libfuzzer_sys::fuzz_target;
+use fuzz_props::invariants::{
+    BalanceSnapshot, InvariantCtx, NonceSnapshot, assert_invariants,
+    assert_nonce_increment_correctness, assert_replay_rejection,
+};
 use nssa::V03State;
 
-fuzz_target!(|data: &[u8]| {
+fuzz_props::fuzz_entry!(|data: &[u8]| {
     let mut u = Unstructured::new(data);
 
     // Generate a fuzz-driven initial state instead of always using the fixed
@@ -95,21 +95,7 @@ fuzz_target!(|data: &[u8]| {
         // First verify every signer's nonce was incremented by exactly one, then
         // replay in the next block to confirm the nonce is permanently consumed.
         if let Ok(applied_tx) = result {
-            let signer_ids: Vec<nssa::AccountId> = match &applied_tx {
-                NSSATransaction::Public(t) => t
-                    .witness_set()
-                    .signatures_and_public_keys()
-                    .iter()
-                    .map(|(_, pk)| nssa::AccountId::from(pk))
-                    .collect(),
-                NSSATransaction::PrivacyPreserving(t) => t
-                    .witness_set()
-                    .signatures_and_public_keys()
-                    .iter()
-                    .map(|(_, pk)| nssa::AccountId::from(pk))
-                    .collect(),
-                NSSATransaction::ProgramDeployment(_) => vec![],
-            };
+            let signer_ids = signer_account_ids(&applied_tx);
             assert_nonce_increment_correctness(&signer_ids, &nonces_before, &state);
             assert_replay_rejection(applied_tx, &mut state, block_id + 1, timestamp + 1);
         }

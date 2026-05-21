@@ -1,4 +1,4 @@
-#![no_main]
+#![cfg_attr(feature = "fuzzer-libfuzzer", no_main)]
 //! Fuzz target: block hash integrity — three invariants unique to block-level validation.
 //!
 //! 1. **Hash integrity via `From<Block>` round-trip** — `HashableBlockData::from(block)`
@@ -21,12 +21,11 @@
 use arbitrary::{Arbitrary, Unstructured};
 use common::block::HashableBlockData;
 use fuzz_props::arbitrary_types::ArbHashableBlockData;
-use libfuzzer_sys::fuzz_target;
 use nssa::PrivateKey;
 
 const DUMMY_KEY_BYTES: [u8; 32] = [1u8; 32];
 
-fuzz_target!(|data: &[u8]| {
+fuzz_props::fuzz_entry!(|data: &[u8]| {
     let mut u = Unstructured::new(data);
     let Ok(wrap) = ArbHashableBlockData::arbitrary(&mut u) else {
         return;

@@ -6,6 +6,30 @@ use crate::arbitrary_types::{ArbAccountId, ArbNSSATransaction, ArbPrivateKey};
 use proptest::prelude::*;
 use testnet_initial_state::initial_pub_accounts_private_keys;
 
+// ── Signer account ID extraction ─────────────────────────────────────────────
+
+/// Extract the [`AccountId`]s of all signers from a transaction's
+/// witness set.  Used by fuzz targets that need to verify nonce
+/// increments after `execute_check_on_state`.
+pub fn signer_account_ids(tx: &common::transaction::NSSATransaction) -> Vec<nssa::AccountId> {
+    use common::transaction::NSSATransaction;
+    match tx {
+        NSSATransaction::Public(pt) => pt
+            .witness_set()
+            .signatures_and_public_keys()
+            .iter()
+            .map(|(_, pk)| nssa::AccountId::from(pk))
+            .collect(),
+        NSSATransaction::PrivacyPreserving(pt) => pt
+            .witness_set()
+            .signatures_and_public_keys()
+            .iter()
+            .map(|(_, pk)| nssa::AccountId::from(pk))
+            .collect(),
+        NSSATransaction::ProgramDeployment(_) => vec![],
+    }
+}
+
 // ── Fuzz-driven state generation ─────────────────────────────────────────────
 
 /// An account with an arbitrary identifier, balance, and private key,

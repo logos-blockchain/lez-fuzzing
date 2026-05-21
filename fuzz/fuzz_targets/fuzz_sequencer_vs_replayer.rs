@@ -1,4 +1,4 @@
-#![no_main]
+#![cfg_attr(feature = "fuzzer-libfuzzer", no_main)]
 //! Fuzz target: sequencer vs replayer differential state-root equivalence.
 //!
 //! Feeds the same block of transactions through two independent state-transition
@@ -40,10 +40,9 @@ use std::collections::HashSet;
 use arbitrary::{Arbitrary, Unstructured};
 use common::transaction::{NSSATransaction, clock_invocation};
 use fuzz_props::generators::{arb_fuzz_native_transfer, arbitrary_fuzz_state, arbitrary_transaction};
-use libfuzzer_sys::fuzz_target;
 use nssa::V03State;
 
-fuzz_target!(|data: &[u8]| {
+fuzz_props::fuzz_entry!(|data: &[u8]| {
     let mut u = Unstructured::new(data);
 
     // ── Initial state ─────────────────────────────────────────────────────────

@@ -3,6 +3,8 @@ name = "fuzz"
 version = "0.1.0"
 edition = "2024"
 publish = false
+# Provides sys_alloc_aligned stub for non-RISC-V host builds (see build.rs)
+build = "build.rs"
 
 [package.metadata]
 cargo-fuzz = true
@@ -34,8 +36,14 @@ path = "fuzz_targets/fuzz_block_verification.rs"
 test = false
 bench = false
 
+[features]
+default          = ["fuzzer-libfuzzer"]
+fuzzer-libfuzzer = ["libfuzzer-sys", "fuzz_props/fuzzer-libfuzzer"]
+fuzzer-afl       = ["afl",           "fuzz_props/fuzzer-afl"]
+
 [dependencies]
-libfuzzer-sys = "0.4"
+libfuzzer-sys = { version = "0.4", optional = true }
+afl           = { version = "0.15", optional = true }
 arbitrary     = { version = "1", features = ["derive"] }
 borsh         = "1"
 nssa          = { path = "../../logos-execution-zone/nssa" }
@@ -43,6 +51,10 @@ nssa_core     = { path = "../../logos-execution-zone/nssa/core" }
 common        = { path = "../../logos-execution-zone/common" }
 fuzz_props    = { path = "../fuzz_props" }
 testnet_initial_state = { path = "../../logos-execution-zone/testnet_initial_state" }
+
+[build-dependencies]
+# Used by build.rs to compile the sys_alloc_aligned stub for non-RISC-V hosts
+cc = "1"
 
 [profile.release]
 debug = true

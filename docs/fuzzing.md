@@ -9,14 +9,54 @@ directory that must be cloned separately).
 
 ---
 
+## Architecture
+
+The fuzz workspace (`fuzz/`) is a single Cargo workspace that covers **both** fuzzing
+engines via Cargo features.  No separate Cargo manifest is needed.
+
+| | libFuzzer lane | AFL++ lane |
+|---|---|---|
+| **Build command** | `cargo fuzz build <TARGET>` | `cd fuzz && cargo afl build --no-default-features --features fuzzer-afl --release --bin <TARGET>` |
+| **Run command** | `cargo fuzz run <TARGET>` | `afl-fuzz -i fuzz/corpus/<TARGET> -o afl-output/<TARGET> -- fuzz/target/release/<TARGET>` |
+| **Cargo feature** | `fuzzer-libfuzzer` (default) | `fuzzer-afl` |
+| **Harness entry** | `::libfuzzer_sys::fuzz_target!(…)` | `fn main() { ::afl::fuzz!(…) }` |
+| **`main()` presence** | Suppressed via `#![no_main]` | Required; provided by `afl::fuzz!` |
+| **`fuzz/Cargo.toml`** | ✅ Source of truth | ✅ Same file — covers both lanes |
+
+The engine is selected at the call site via the `fuzz_props::fuzz_entry!` macro:
+
+```rust
+#![cfg_attr(feature = "fuzzer-libfuzzer", no_main)]
+
+fuzz_props::fuzz_entry!(|data: &[u8]| {
+    // … harness body …
+});
+```
+
+The `cfg` attributes in the macro expansion resolve against the **calling crate's** features
+(`fuzz/`), not `fuzz_props`'s features.
+
+---
+
 ## Prerequisites
 
 ```bash
-# Rust nightly is required by cargo-fuzz / libFuzzer
+# libFuzzer lane
 rustup install nightly
 rustup component add llvm-tools-preview --toolchain nightly
-
 cargo install cargo-fuzz
+
+# AFL++ lane (additional)
+# macOS:
+brew install afl-fuzz
+
+# Linux — build from source (apt packages are several major versions behind):
+git clone https://github.com/AFLplusplus/AFLplusplus
+cd AFLplusplus && make distrib && sudo make install
+cd ..
+
+# Rust wrapper (all platforms):
+cargo install cargo-afl
 ```
 
 ---
@@ -47,10 +87,10 @@ proof generation. The `just` recipes handle this automatically.
 ```bash
 # From lez-fuzzing/
 
-# Run all targets for 30 s each
+# Run all targets for 30 s each (libFuzzer)
 just fuzz
 
-# Run a specific target for 120 s
+# Run a specific target for 120 s (libFuzzer)
 RISC0_DEV_MODE=1 cargo fuzz run fuzz_state_transition -- -max_total_time=120
 
 # Run the saved corpus (regression mode, no mutations)
@@ -95,12 +135,11 @@ This single command does four things automatically:
 |---|---|
 | Creates the corpus directory | `fuzz/corpus/fuzz_my_feature/` |
 | Writes a typed fuzz target template | `fuzz/fuzz_targets/fuzz_my_feature.rs` |
-| Appends `[[bin]]` entry | `fuzz/Cargo.toml` |
+| Appends `[[bin]]` entry to `fuzz/Cargo.toml` | Covers **both** the libFuzzer and AFL++ lanes |
 | Inserts target into every CI matrix + perf loop | `.github/workflows/fuzz.yml` |
 
-The generated template uses `ArbNSSATransaction` from `fuzz_props::arbitrary_types`
-so libfuzzer drives every field of `NSSATransaction` independently — no manual
-`Unstructured` wiring required.
+The generated template uses `fuzz_props::fuzz_entry!` and works with both engines
+without modification.
 
 ### Step 2 — Implement the target
 
@@ -110,13 +149,15 @@ function under test and any invariant assertions.  Use the typed wrappers from
 structured input, or the proptest generators from
 [`fuzz_props::generators`](../fuzz_props/src/generators.rs) for richer strategies.
 
-### Step 3 — Register the binary (automated)
+### Step 3 — Automated registration (cargo-fuzz + CI)
 
 `just new-target` calls [`scripts/add_fuzz_target.py`](../scripts/add_fuzz_target.py)
-which appends the `[[bin]]` entry to [`fuzz/Cargo.toml`](../fuzz/Cargo.toml)
-automatically. Once present, `cargo fuzz list` (and therefore `just fuzz`,
-`just fuzz-regression`, `just corpus-cmin`) pick up the target automatically — no
-further Justfile edits required.
+which:
+- Appends the `[[bin]]` entry to [`fuzz/Cargo.toml`](../fuzz/Cargo.toml).
+  This **single entry** covers both the libFuzzer lane (`cargo fuzz build`) and
+  the AFL++ lane (`cargo afl build --no-default-features --features fuzzer-afl`).
+- Inserts the target name into every strategy matrix and the perf-baseline shell
+  loop in [`.github/workflows/fuzz.yml`](../.github/workflows/fuzz.yml).
 
 > **Manual fallback:** if you create a target without `just new-target`, add the
 > entry yourself:
@@ -129,21 +170,19 @@ further Justfile edits required.
 > bench = false
 > ```
 
-### Step 4 — Add to CI matrix (automated)
-
-`just new-target` also inserts `fuzz_my_feature` into every strategy matrix and the
-perf-baseline shell loop in [`.github/workflows/fuzz.yml`](../.github/workflows/fuzz.yml)
-automatically via `scripts/add_fuzz_target.py`.
-
-> **Manual fallback:** if you created the target without `just new-target`, add
-> `- fuzz_my_feature` to the `target:` list in the three places shown in
-> `.github/workflows/fuzz.yml` (smoke-fuzz, regression, perf-baseline).
-
-### Step 5 — Verify
+### Step 4 — Verify
 
 ```bash
+# Verify the libFuzzer build
 RISC0_DEV_MODE=1 cargo fuzz build fuzz_my_feature
 just fuzz-regression   # runs the new target against its (empty) corpus
+
+# Verify the AFL++ build (same fuzz/Cargo.toml — no separate manifest needed)
+cd fuzz && cargo afl build \
+  --no-default-features \
+  --features fuzzer-afl \
+  --release \
+  --bin fuzz_my_feature
 ```
 
 ### Quick reference: what to touch
@@ -152,9 +191,167 @@ just fuzz-regression   # runs the new target against its (empty) corpus
 |---|---|---|
 | `fuzz/fuzz_targets/fuzz_<name>.rs` | Create | ✅ `just new-target` |
 | `fuzz/corpus/fuzz_<name>/` | Create | ✅ `just new-target` |
-| `fuzz/Cargo.toml` | Add `[[bin]]` | ✅ `just new-target` |
+| `fuzz/Cargo.toml` | Add `[[bin]]` (covers both lanes) | ✅ `just new-target` |
 | `Justfile` | Nothing — auto-discovers | ✅ automatic |
 | `.github/workflows/fuzz.yml` | Add to 3 matrix lists | ✅ `just new-target` |
+
+---
+
+## AFL++ Parallel Fuzzing Lane
+
+### Prerequisites
+
+Install AFL++ natively on your machine.
+
+> **Note on Linux package versions**: The `afl++` package in Debian stable (Bookworm)
+> and Ubuntu LTS is several major versions behind the current AFL++ 4.x series and may
+> be incompatible with `cargo-afl`. **Build from source** for a current version.
+
+```bash
+# macOS — Homebrew keeps the formula up to date
+brew install afl-fuzz
+
+# Linux — build from source (~5 min)
+git clone https://github.com/AFLplusplus/AFLplusplus
+cd AFLplusplus
+make distrib        # builds all components: afl-fuzz, afl-cc, afl-clang-fast, …
+sudo make install
+cd ..
+
+# Rust build wrapper (all platforms)
+cargo install cargo-afl
+```
+
+> **macOS: crash reporter must be disabled** — AFL++ detects the macOS `ReportCrash`
+> daemon and aborts if it is active (it delays crash notifications and causes AFL++ to
+> mis-classify crashes as timeouts).  The `just fuzz-afl` and `just fuzz-afl-parallel`
+> recipes disable it automatically for the duration of the run and re-enable it on exit
+> (via a shell `trap`).  You can also manage it manually:
+>
+> ```bash
+> # Disable (run once before a long session)
+> just afl-macos-setup
+>
+> # Re-enable afterward
+> just afl-macos-teardown
+> ```
+>
+> Or use the raw `launchctl` commands shown in the AFL++ error message:
+>
+> ```bash
+> SL=/System/Library; PL=com.apple.ReportCrash
+> launchctl unload -w ${SL}/LaunchAgents/${PL}.plist
+> sudo launchctl unload -w ${SL}/LaunchDaemons/${PL}.Root.plist
+> ```
+
+### Build
+
+```bash
+# All targets
+just afl-build
+
+# Single target
+just afl-build-target fuzz_state_transition
+```
+
+Both commands compile `fuzz/` with `--no-default-features --features fuzzer-afl`.
+Output binaries land in `fuzz/target/release/`.
+
+### Run (single instance)
+
+```bash
+# 120-second smoke run
+just fuzz-afl fuzz_state_transition
+
+# Custom duration
+just fuzz-afl fuzz_state_transition 600
+```
+
+### Run (parallel)
+
+```bash
+# 1 main + 3 secondary instances for 5 minutes
+just fuzz-afl-parallel fuzz_state_transition 4 300
+
+# AFL++ rule: always start the main instance first;
+# secondary instances are started with -S flags automatically.
+```
+
+### Monitor
+
+```bash
+just afl-status fuzz_state_transition
+# … calls afl-whatsup afl-output/fuzz_state_transition
+```
+
+### Triage
+
+```bash
+# Minimise a crash artifact to the smallest reproducing input
+just afl-tmin fuzz_state_transition afl-output/fuzz_state_transition/default/crashes/id:000000,...
+
+# Pretty-print as Rust byte literal (for pasting into a unit test)
+just afl-fmt afl-output/fuzz_state_transition/default/crashes/id:000000,...
+```
+
+### Sync queue to shared corpus
+
+```bash
+# Copies afl-output/*/queue/id:* into fuzz/corpus/<target>/
+# Run this after any AFL++ session to share findings with cargo-fuzz
+just afl-corpus-sync
+```
+
+### How the shared harness works
+
+| Mechanism | libFuzzer | AFL++ |
+|---|---|---|
+| **Entry macro** | `::libfuzzer_sys::fuzz_target!(…)` | `::afl::fuzz!(…)` inside `fn main()` |
+| **`no_main` suppression** | `#![cfg_attr(feature = "fuzzer-libfuzzer", no_main)]` | Not applied (AFL++ needs a real `main`) |
+| **Feature gate** | `cfg(feature = "fuzzer-libfuzzer")` | `cfg(feature = "fuzzer-afl")` |
+| **Feature resolution** | Resolved at `fuzz/` (calling crate), not at `fuzz_props/` | Same |
+| **`libfuzzer-sys` dep** | Optional, active under `fuzzer-libfuzzer` | Not compiled — avoids `main()` conflict |
+| **`afl` dep** | Not compiled | Optional, active under `fuzzer-afl` |
+| **Default build** | `default = ["fuzzer-libfuzzer"]` → `cargo fuzz` just works | Requires `--no-default-features --features fuzzer-afl` |
+
+The `fuzz_props::fuzz_entry!` macro defined in [`fuzz_props/src/lib.rs`](../fuzz_props/src/lib.rs)
+expands to the right entry point based on the active feature:
+
+```rust
+#[macro_export]
+macro_rules! fuzz_entry {
+    (|$data:ident: &[u8]| $body:block) => {
+        #[cfg(feature = "fuzzer-libfuzzer")]
+        ::libfuzzer_sys::fuzz_target!(|$data: &[u8]| $body);
+
+        #[cfg(feature = "fuzzer-afl")]
+        fn main() {
+            ::afl::fuzz!(|$data: &[u8]| $body);
+        }
+    };
+}
+```
+
+### CI (`.github/workflows/fuzz-afl.yml`)
+
+The nightly AFL++ CI workflow has two jobs:
+
+| Job | Triggers | Matrix |
+|-----|----------|--------|
+| `afl-smoke` | nightly + `workflow_dispatch` | 7 priority targets, 120 s each |
+| `afl-coverage` | nightly, `needs: afl-smoke` | 3 key targets; LLVM HTML report |
+
+The smoke job:
+1. Builds the target with `cargo afl build --no-default-features --features fuzzer-afl`
+2. Runs `afl-fuzz` for 120 s in `aflplusplus/aflplusplus:v4.40c` container
+3. Syncs new queue entries into `fuzz/corpus/<target>/` and opens a corpus PR
+4. Uploads crashes/hangs as a workflow artifact
+
+The coverage job:
+1. Downloads the smoke findings
+2. Rebuilds with `RUSTFLAGS="-C instrument-coverage"`
+3. Runs all corpus + queue inputs through the binary
+4. Merges `.profraw` → `.profdata` → HTML report via `llvm-cov show`
 
 ---
 
@@ -186,18 +383,27 @@ just update-lez
 When `cargo fuzz` finds a crash it writes an artifact to
 `fuzz/artifacts/fuzz_<target>/crash-<hash>`.
 
-### Minimise
+### Minimise (libFuzzer)
 
 ```bash
 # Produces a smaller input that still triggers the same crash
 just fuzz-tmin fuzz_state_transition fuzz/artifacts/fuzz_state_transition/crash-abc123
 ```
 
+### Minimise (AFL++)
+
+```bash
+just afl-tmin fuzz_state_transition afl-output/fuzz_state_transition/default/crashes/id:000000,...
+```
+
 ### Convert to a regression test
 
 ```bash
-# Print the bytes as a Rust byte-literal (paste into a #[test])
+# libFuzzer: print bytes as a Rust byte-literal
 cargo fuzz fmt fuzz_state_transition fuzz/artifacts/fuzz_state_transition/crash-abc123
+
+# AFL++: print bytes as a Rust byte-literal
+just afl-fmt afl-output/fuzz_state_transition/default/crashes/id:000000,...
 ```
 
 Add the minimised file to the corpus so CI always reproduces it:
@@ -208,6 +414,42 @@ cp fuzz/artifacts/fuzz_state_transition/crash-abc123-minimised \
 ```
 
 Open a PR. The `regression` CI job will permanently block re-introduction of this bug.
+
+---
+
+## Coverage Reports
+
+### Step 1 — libFuzzer coverage (via `cargo fuzz coverage`)
+
+```bash
+# Generates coverage for a single target
+cargo fuzz coverage fuzz_state_transition
+
+# Generates coverage for all targets
+just coverage-all
+```
+
+Reports land in `fuzz/coverage/<target>/`.
+
+### Step 2 — AFL++ LLVM coverage
+
+Run after a successful AFL++ session (queue data in `afl-output/<target>/`):
+
+```bash
+# Combines libFuzzer + AFL++ corpus into a single LLVM HTML report
+just coverage fuzz_state_transition
+```
+
+This:
+1. Runs `cargo fuzz coverage` (step 1)
+2. Detects `afl-output/fuzz_state_transition/` and builds the target with
+   `RUSTFLAGS="-C instrument-coverage" cargo build --manifest-path fuzz/Cargo.toml --no-default-features --features fuzzer-afl --release`
+3. Runs all AFL++ queue entries through the binary, collects `.profraw` files
+4. Merges profiles with `llvm-profdata merge` and generates an HTML report with `llvm-cov show`
+5. Writes the report to `coverage/afl/fuzz_state_transition/html/index.html`
+
+The AFL++ CI coverage job (`afl-coverage` in [`.github/workflows/fuzz-afl.yml`](../.github/workflows/fuzz-afl.yml))
+automates steps 2–5 and uploads the report as a workflow artifact.
 
 ---
 
@@ -242,6 +484,8 @@ Concrete invariants currently registered in `assert_invariants()`:
 >   whose signer-account list is private to the `nssa` crate.  The caller must derive signer
 >   IDs from the transaction's witness set before consuming the diff, then call the standalone
 >   `assert_nonce_increment_correctness(signer_ids, nonces_before, state_after)` helper.
+>   The `signer_account_ids()` helper in `fuzz_props::generators` extracts signer `AccountId`s
+>   from an `NSSATransaction`'s witness set.
 
 Additional invariants enforced **inline** in specific targets (not via `ProtocolInvariant`):
 
@@ -289,6 +533,7 @@ fuzz target parameters for zero-boilerplate structured fuzzing.
 | `arb_fuzz_native_transfer()` | Correctly-signed native-transfer `NSSATransaction` referencing accounts from an `arbitrary_fuzz_state()` result; gives the fuzzer a path to successful state transitions |
 | `arbitrary_transaction()` | Structured `NSSATransaction` (`Public` or `ProgramDeployment`) from unstructured bytes via `ArbNSSATransaction` |
 | `arb_borsh_transaction_bytes()` | Raw Borsh bytes including invalid encodings |
+| `signer_account_ids()` | Extracts `AccountId`s of all signers from an `NSSATransaction`'s witness set; used to derive signer IDs before `apply_state_diff` consumes the diff |
 | `arb_native_transfer_tx()` | Valid native-transfer `NSSATransaction` between known testnet genesis accounts (proptest strategy) |
 | `test_accounts()` | Returns `(AccountId, PrivateKey)` pairs from `testnet_initial_state` |
 | `arb_hashable_block_data()` | `HashableBlockData` with 0–8 valid native transfers (proptest strategy) |
@@ -326,9 +571,12 @@ Measured on a 4-core x86_64 Linux runner with `RISC0_DEV_MODE=1`:
 Recommended local settings for longer runs:
 
 ```bash
-# Use all available cores
+# libFuzzer — use all available cores
 RISC0_DEV_MODE=1 cargo fuzz run fuzz_state_transition \
   -- -max_total_time=3600 -jobs=$(nproc) -workers=$(nproc)
+
+# AFL++ — parallel (1 main + N-1 secondary)
+just fuzz-afl-parallel fuzz_state_transition $(nproc) 3600
 ```
 
 ---
@@ -354,6 +602,6 @@ flag stubs out ZK proof generation and replaces it with a fast mock implementati
 |------|-------|
 | `PrivacyPreservingTransaction` coverage | Excluded from `fuzz_encoding_roundtrip` because its ZK receipt cannot be reconstructed in a fuzzing loop. A dedicated slow target with `RISC0_DEV_MODE=1` and `proptest` should be added after the current targets are stable |
 | `fuzz_validate_execute_consistency` new-account detection | If `execute_check_on_state` creates a brand-new account absent from both the genesis set and the diff, that state-widening will not be detected — full detection requires iterating all accounts in `V03State`, which the API does not currently expose |
-| AFL++ integration | A `just fuzz-afl` recipe can be added later; the same corpus is compatible |
 | Differential testing (sequencer vs replayer) | ✅ Implemented — `fuzz_sequencer_vs_replayer` feeds the same block through the sequencer path (`validate_on_state` → `apply_state_diff`) and the replayer path (`execute_check_on_state`) and asserts identical state for all known accounts |
+| AFL++ integration | ✅ Implemented — `just afl-build`, `just fuzz-afl`, `just fuzz-afl-parallel`; nightly CI in `.github/workflows/fuzz-afl.yml`; single `fuzz/Cargo.toml` covers both engines via feature flags |
 | LEZ version tracking | There is no submodule pin — `lez-fuzzing` reads `../logos-execution-zone` as checked out. Update that repo to a release tag or a tested commit, then run `just update-lez` (which does `git pull --ff-only`) and open a PR to bump it |

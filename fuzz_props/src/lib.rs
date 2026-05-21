@@ -6,6 +6,26 @@ pub mod arbitrary_types;
 pub mod generators;
 pub mod invariants;
 
+/// Generates the fuzzer entry point for whichever engine this crate is
+/// compiled with, selected via Cargo features:
+///
+/// | Feature              | Expansion |
+/// |----------------------|-----------|
+/// | `fuzzer-libfuzzer`   | `libfuzzer_sys::fuzz_target!(…)` |
+/// | `fuzzer-afl`         | `fn main() { afl::fuzz!(…) }` |
+#[macro_export]
+macro_rules! fuzz_entry {
+    (|$data:ident: &[u8]| $body:block) => {
+        #[cfg(feature = "fuzzer-libfuzzer")]
+        ::libfuzzer_sys::fuzz_target!(|$data: &[u8]| $body);
+
+        #[cfg(feature = "fuzzer-afl")]
+        fn main() {
+            ::afl::fuzz!(|$data: &[u8]| $body);
+        }
+    };
+}
+
 #[cfg(test)]
 mod seed_gen {
     use std::fs;
