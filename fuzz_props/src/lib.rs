@@ -86,4 +86,16 @@ macro_rules! fuzz_entry {
 }
 
 #[cfg(test)]
+mod seed_gen {
+    use std::fs;
+    use std::path::Path;
+
+        #[cfg(feature = "fuzzer-afl")]
+        fn main() {
+            ::afl::fuzz!(|$data: &[u8]| $body);
+        }
+    };
+}
+
+#[cfg(test)]
 mod tests;

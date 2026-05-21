@@ -11,7 +11,6 @@ use testnet_initial_state::initial_pub_accounts_private_keys;
 /// Extract the [`AccountId`]s of all signers from a transaction's
 /// witness set.  Used by fuzz targets that need to verify nonce
 /// increments after `execute_check_on_state`.
-#[must_use]
 pub fn signer_account_ids(tx: &common::transaction::NSSATransaction) -> Vec<nssa::AccountId> {
     use common::transaction::NSSATransaction;
     match tx {

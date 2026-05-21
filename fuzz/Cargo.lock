@@ -2009,6 +2009,7 @@ dependencies = [
  "afl",
  "arbitrary",
  "borsh",
+ "cc",
  "common",
  "fuzz_props",
  "libfuzzer-sys",
