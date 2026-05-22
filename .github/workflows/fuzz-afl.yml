@@ -56,23 +56,25 @@ jobs:
             --release \
             --bin ${{ matrix.target }}
 
-      - name: Create corpus directory
-        run: mkdir -p fuzz/corpus/${{ matrix.target }}
+      - name: Create corpus directories
+        run: |
+          mkdir -p corpus/libfuzz/${{ matrix.target }}
+          mkdir -p corpus/afl/${{ matrix.target }}
 
       - name: Run AFL++ for 120 seconds
         run: |
           mkdir -p afl-output/${{ matrix.target }}
           timeout 120 \
             afl-fuzz \
-              -i fuzz/corpus/${{ matrix.target }} \
+              -i corpus/libfuzz/${{ matrix.target }} \
               -o afl-output/${{ matrix.target }} \
               -- fuzz/target/release/${{ matrix.target }} \
           || true   # timeout exit code 124 is expected
 
-      - name: Sync queue entries to shared corpus
+      - name: Sync queue entries to AFL corpus
         run: |
           TARGET="${{ matrix.target }}"
-          DEST="fuzz/corpus/${TARGET}"
+          DEST="corpus/afl/${TARGET}"
           mkdir -p "$DEST"
           count=0
           for instance_dir in afl-output/${TARGET}/*/; do
@@ -99,7 +101,7 @@ jobs:
             Automated corpus update from the nightly AFL++ smoke run.
             Target: `${{ matrix.target }}`
           branch: "afl-corpus/${{ matrix.target }}"
-          add-paths: "fuzz/corpus/${{ matrix.target }}/"
+          add-paths: "corpus/afl/${{ matrix.target }}/"
           delete-branch: true
 
       - name: Upload crashes and hangs artifact
@@ -167,8 +169,8 @@ jobs:
           mkdir -p "$PROFRAW_DIR"
           idx=0
 
-          # Shared corpus
-          for f in fuzz/corpus/${TARGET}/id:* fuzz/corpus/${TARGET}/*; do
+          # libFuzzer corpus (checked-in)
+          for f in corpus/libfuzz/${TARGET}/id:* corpus/libfuzz/${TARGET}/*; do
             [ -f "$f" ] || continue
             LLVM_PROFILE_FILE="${PROFRAW_DIR}/${idx}.profraw" "$BINARY" < "$f" 2>/dev/null || true
             idx=$((idx + 1))

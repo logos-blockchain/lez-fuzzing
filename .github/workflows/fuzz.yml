@@ -75,7 +75,9 @@ jobs:
 
       - name: Run smoke fuzz (60 s)
         run: |
+          mkdir -p corpus/libfuzz/${{ matrix.target }}
           cargo fuzz run ${{ matrix.target }} \
+            corpus/libfuzz/${{ matrix.target }} \
             -- -max_total_time=60 -jobs=2 -workers=2
 
       - name: Upload crash artifacts
@@ -127,8 +129,9 @@ jobs:
       - run: cargo install cargo-fuzz
       - name: Reproduce corpus
         run: |
+          mkdir -p corpus/libfuzz/${{ matrix.target }}
           cargo fuzz run ${{ matrix.target }} \
-            fuzz/corpus/${{ matrix.target }} -- -runs=0
+            corpus/libfuzz/${{ matrix.target }} -- -runs=0
 
   # ── proptest property tests ──────────────────────────────────────────────────
   proptest:
