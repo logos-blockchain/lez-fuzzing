@@ -613,9 +613,11 @@ clean-artifacts:
     rm -rf fuzz/artifacts/
 
 # Remove all coverage reports.
-# Also removes the temporary profdata that cargo-fuzz writes to fuzz/coverage/.
+# Also removes the temporary profdata that cargo-fuzz writes to fuzz/coverage/
+# and any stray .profraw files left by the instrumented binaries.
 clean-coverage:
     rm -rf coverage/ fuzz/coverage/
+    find . -name '*.profraw' -delete
 
 # Remove AFL++ output directories (crashes, hangs, queue).
 # Note: the queue is also stored in corpus/afl/ via `just afl-corpus-sync`.
@@ -626,5 +628,5 @@ clean-afl:
 clean-corpus:
     rm -rf corpus/
 
-# Remove everything: builds, artifacts, coverage, corpus, and AFL++ output
-clean-all: clean clean-artifacts clean-coverage clean-corpus clean-afl
+# Remove everything: builds, artifacts, coverage, and AFL++ output (preserves corpus/)
+clean-all: clean clean-artifacts clean-coverage clean-afl
