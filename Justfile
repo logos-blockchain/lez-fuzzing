@@ -253,6 +253,48 @@ fuzz-afl TARGET="" TIME="30":
     done
     just afl-corpus-sync
 
+    # ── Crash / hang summary ──────────────────────────────────────────────────
+    echo ""
+    echo "=== AFL++ crash / hang summary ==="
+    total_crashes=0
+    total_hangs=0
+    for target_dir in afl-output/*/; do
+        [ -d "$target_dir" ] || continue
+        for instance_dir in "$target_dir"*/; do
+            [ -d "$instance_dir" ] || continue
+            crashes_dir="${instance_dir}crashes"
+            hangs_dir="${instance_dir}hangs"
+            n_crashes=0
+            n_hangs=0
+            if [ -d "$crashes_dir" ]; then
+                n_crashes=$(find "$crashes_dir" -maxdepth 1 -type f | wc -l | tr -d ' ')
+            fi
+            if [ -d "$hangs_dir" ]; then
+                n_hangs=$(find "$hangs_dir" -maxdepth 1 -type f | wc -l | tr -d ' ')
+            fi
+            if [ "$n_crashes" -gt 0 ] || [ "$n_hangs" -gt 0 ]; then
+                echo "  !! $(basename "$target_dir")/$(basename "$instance_dir")  crashes=$n_crashes  hangs=$n_hangs"
+                for f in "$crashes_dir"/id:*; do
+                    [ -f "$f" ] && echo "       $f"
+                done
+                for f in "$hangs_dir"/id:*; do
+                    [ -f "$f" ] && echo "       $f"
+                done
+            fi
+            total_crashes=$((total_crashes + n_crashes))
+            total_hangs=$((total_hangs + n_hangs))
+        done
+    done
+    echo ""
+    if [ "$total_crashes" -eq 0 ] && [ "$total_hangs" -eq 0 ]; then
+        echo "  ✓ No crashes or hangs found across all targets."
+    else
+        echo "  TOTAL  crashes=$total_crashes  hangs=$total_hangs"
+        echo ""
+        echo "  Minimise a crash : just afl-tmin <target> <crash-file>"
+        echo "  Format for a report: just afl-fmt <crash-file>"
+    fi
+
 # Run AFL++ with N parallel instances (1 main + N-1 secondary) for TIME seconds.
 # Requires that afl-fuzz is on PATH; all instances share afl-output/{{TARGET}}/.
 # On macOS the crash reporter is disabled automatically for the duration of the
