@@ -131,14 +131,8 @@ The extension noted in [`docs/fuzzing.md`](docs/fuzzing.md:356) is:
 
 ## Decision-maker Recommendations
 
-The current implementation is **well-architected and production-ready** for a protocol at this stage. Its [`fuzz_props`](fuzz_props/src/lib.rs) crate, typed `Arbitrary` wrappers, and `ProtocolInvariant` framework provide the right abstractions to add new targets and invariants incrementally.
-
 **Highest-ROI next steps, in priority order:**
 
-1. **The invariant framework is complete for the current target set** — three invariants are fully implemented and auto-run by [`assert_invariants()`](fuzz_props/src/invariants.rs:325): [`StateIsolationOnFailure`](fuzz_props/src/invariants.rs:60), [`BalanceConservation`](fuzz_props/src/invariants.rs:94), and [`FailedTxNonceStability`](fuzz_props/src/invariants.rs:130). Two further invariants ([`ReplayRejection`](fuzz_props/src/invariants.rs:169) and [`NonceIncrementCorrectness`](fuzz_props/src/invariants.rs:196)) are registered stubs; callers use the dedicated `assert_replay_rejection` and `assert_nonce_increment_correctness` helpers directly. The next step is to audit all 15 targets to confirm every applicable invariant is wired up, then add mutation tests via `cargo-mutants`.
+1. **Add AFL++ as a parallel fuzzing lane** (`just fuzz-afl`) — zero corpus migration cost, discovers different mutation paths through the same targets as libFuzzer.
 
-2. ✅ **The sequencer-vs-replayer differential target is implemented** — [`fuzz_sequencer_vs_replayer`](fuzz/fuzz_targets/fuzz_sequencer_vs_replayer.rs) catches consensus-breaking state root divergence between the sequencer and replayer pipelines, unique to this protocol's architecture.
-
-3. **Add AFL++ as a parallel fuzzing lane** (`just fuzz-afl`) — zero corpus migration cost, discovers different mutation paths through the same targets as libFuzzer.
-
-4. **Add `cargo-mutants`** before any external security audit — proves the invariant assertions in [`fuzz_props/src/invariants.rs`](fuzz_props/src/invariants.rs) are actually capable of catching the bugs they claim to detect.
+2. **Add `cargo-mutants`** before any external security audit — proves the invariant assertions in [`fuzz_props/src/invariants.rs`](fuzz_props/src/invariants.rs) are actually capable of catching the bugs they claim to detect.
