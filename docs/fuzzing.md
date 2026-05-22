@@ -222,6 +222,29 @@ cd ..
 cargo install cargo-afl
 ```
 
+> **macOS: run `afl-system-config` once before fuzzing** — AFL++ uses System V shared
+> memory (`shmget`) to pass coverage bitmaps between the fuzzer and the target.  macOS
+> ships with very small defaults (`kern.sysv.shmmax = 4 MB`, `kern.sysv.shmmni = 32`)
+> that are exhausted as soon as multiple AFL++ instances start in parallel, causing every
+> run to abort immediately with:
+>
+> ```
+> [-]  SYSTEM ERROR : shmget() failed, try running afl-system-config
+>        OS message : Invalid argument
+> ```
+>
+> Fix by running the AFL++ system-configuration helper once per boot (or after every
+> macOS update):
+>
+> ```bash
+> sudo afl-system-config
+> ```
+>
+> This raises `shmmax`, `shmmni`, `shmall`, and related limits to values suitable for
+> parallel fuzzing.  The change is not persistent across reboots, so re-run it after
+> each restart.  The `just fuzz-afl` and `just fuzz-afl-parallel` recipes **do not**
+> call this automatically because it requires `sudo`.
+
 > **macOS: crash reporter must be disabled** — AFL++ detects the macOS `ReportCrash`
 > daemon and aborts if it is active (it delays crash notifications and causes AFL++ to
 > mis-classify crashes as timeouts).  The `just fuzz-afl` and `just fuzz-afl-parallel`
