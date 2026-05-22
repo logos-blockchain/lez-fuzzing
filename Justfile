@@ -165,7 +165,11 @@ afl-macos-teardown:
     echo "Done."
 
 # Run AFL++ on one target or ALL targets when no target is supplied.
-# Builds binaries as needed; syncs the queue to the shared corpus when done.
+# Builds binaries as needed; syncs the queue to corpus/afl/<target>/ when done.
+#
+# AFL++ is seeded from corpus/libfuzz/<target>/ (the libFuzzer corpus).
+# After the run, new inputs discovered by AFL++ are synced to corpus/afl/<target>/
+# via `just afl-corpus-sync`.
 #
 # On macOS the crash reporter is disabled automatically for the duration of the
 # run and re-enabled when the script exits (via a shell trap).
@@ -234,7 +238,7 @@ fuzz-afl TARGET="" TIME="120":
     _run_one() {
         local t="$1"
         local BINARY="fuzz/target/release/$t"
-        local CORPUS="fuzz/corpus/$t"
+        local CORPUS="corpus/libfuzz/$t"   # seed from libFuzzer corpus
         local OUTPUT="afl-output/$t"
         mkdir -p "$CORPUS" "$OUTPUT"
         if [ ! -f "$BINARY" ]; then
@@ -260,7 +264,7 @@ fuzz-afl-parallel TARGET WORKERS="4" TIME="300":
     #!/bin/bash
     set -euo pipefail
     BINARY="fuzz/target/release/{{TARGET}}"
-    CORPUS="fuzz/corpus/{{TARGET}}"
+    CORPUS="corpus/libfuzz/{{TARGET}}"   # seed from libFuzzer corpus
     OUTPUT="afl-output/{{TARGET}}"
     mkdir -p "$CORPUS" "$OUTPUT"
     if [ ! -f "$BINARY" ]; then
@@ -292,8 +296,8 @@ fuzz-afl-parallel TARGET WORKERS="4" TIME="300":
     just afl-corpus-sync
 
 # Copy all queue entries from every AFL++ output directory into the matching
-# shared corpus directory (fuzz/corpus/<target>/).  Run after any AFL++ session
-# to make new interesting inputs available to cargo-fuzz and CI.
+# AFL corpus directory (corpus/afl/<target>/).  Run after any AFL++ session
+# to make new interesting inputs available for coverage measurement and future runs.
 afl-corpus-sync:
     #!/bin/bash
     set -euo pipefail
@@ -303,7 +307,7 @@ afl-corpus-sync:
     fi
     for target_dir in afl-output/*/; do
         TARGET=$(basename "$target_dir")
-        DEST="fuzz/corpus/${TARGET}"
+        DEST="corpus/afl/${TARGET}"
         mkdir -p "$DEST"
         count=0
         for instance_dir in "$target_dir"*/; do
@@ -339,80 +343,263 @@ afl-fmt ARTIFACT:
     python3 -c "import sys; data=open(sys.argv[1],'rb').read(); print('b\"' + ''.join(f'\\\\x{b:02x}' for b in data) + '\"')" {{ARTIFACT}}
 
 # ── Coverage ──────────────────────────────────────────────────────────────────
+#
+# cargo-fuzz always writes its profdata to the fixed path:
+#   fuzz/coverage/<TARGET>/coverage.profdata
+# Each coverage recipe immediately copies that file into the organised tree
+# (coverage/libfuzz/ or coverage/afl/) so that a subsequent run of the other
+# engine cannot overwrite the data we need for the summary reports.
 
-# Generate a coverage report for a single target.
-#
-# Step 1 (libFuzzer): cargo fuzz coverage {{TARGET}}
-# Step 2 (AFL++, only if afl-output/{{TARGET}}/ exists):
-#   Build with instrument-coverage, run the AFL++ queue through the binary,
-#   merge raw profiles, and generate an HTML report in coverage/afl/{{TARGET}}/.
-#
-# Usage: just coverage fuzz_state_transition
-coverage TARGET:
+# Generate a libFuzzer-only coverage report for a single target.
+# Runs `cargo fuzz coverage` against corpus/libfuzz/<TARGET>/, then copies the
+# profdata into coverage/libfuzz/<TARGET>/ and renders an HTML report there.
+# Output: coverage/libfuzz/{{TARGET}}/html/index.html
+# Usage: just coverage-libfuzz fuzz_state_transition
+coverage-libfuzz TARGET:
     #!/bin/bash
     set -euo pipefail
-    # ── Step 1: libFuzzer coverage ────────────────────────────────────────────
-    echo "=== cargo fuzz coverage {{TARGET}} ==="
-    cargo fuzz coverage {{TARGET}} || true
 
-    # ── Step 2: AFL++ LLVM coverage (only if queue data exists) ──────────────
-    AFL_OUTPUT="afl-output/{{TARGET}}"
-    if [ ! -d "$AFL_OUTPUT" ]; then
-        echo "No AFL++ output for {{TARGET}} — skipping AFL++ coverage step."
+    # ── Resolve LLVM tools from the active Rust toolchain ─────────────────────
+    _SYSROOT=$(rustc --print sysroot)
+    _HOST=$(rustc -vV | sed -n 's/^host: //p')
+    _LLVM_BIN="${_SYSROOT}/lib/rustlib/${_HOST}/bin"
+    LLVM_COV="${_LLVM_BIN}/llvm-cov"
+    command -v "$LLVM_COV" &>/dev/null || LLVM_COV=$(command -v llvm-cov 2>/dev/null || true)
+    if [ -z "$LLVM_COV" ] || [ ! -x "$LLVM_COV" ]; then
+        echo "ERROR: llvm-cov not found in Rust sysroot (${_LLVM_BIN}) or PATH."
+        echo "  Run: rustup component add llvm-tools-preview"
+        exit 1
+    fi
+
+    CORPUS="corpus/libfuzz/{{TARGET}}"
+    mkdir -p "$CORPUS"
+
+    echo "=== cargo fuzz coverage {{TARGET}} (libFuzzer corpus) ==="
+    cargo fuzz coverage {{TARGET}} "$CORPUS"
+
+    # ── Copy profdata to the organised tree ───────────────────────────────────
+    # cargo-fuzz always writes here; we copy immediately so a later AFL pass
+    # cannot clobber this file before the summary reads it.
+    CARGO_PROFDATA="fuzz/coverage/{{TARGET}}/coverage.profdata"
+    LF_COV_DIR="coverage/libfuzz/{{TARGET}}"
+    mkdir -p "$LF_COV_DIR"
+    if [ ! -f "$CARGO_PROFDATA" ]; then
+        echo "WARNING: profdata not produced — skipping HTML generation."
         exit 0
     fi
-    echo "=== AFL++ LLVM coverage for {{TARGET}} ==="
-    BINARY_DIR="fuzz/target/release"
-    COV_DIR="coverage/afl/{{TARGET}}"
-    PROFRAW_DIR="${COV_DIR}/profraw"
-    mkdir -p "$PROFRAW_DIR"
+    cp "$CARGO_PROFDATA" "${LF_COV_DIR}/coverage.profdata"
+    PROFDATA="${LF_COV_DIR}/coverage.profdata"
 
-    # Build the target with LLVM instrumentation enabled.
-    RUSTFLAGS="-C instrument-coverage" \
-        cargo build \
-            --manifest-path fuzz/Cargo.toml \
-            --no-default-features \
-            --features fuzzer-afl \
-            --release \
-            --bin {{TARGET}}
+    # ── Render HTML ───────────────────────────────────────────────────────────
+    BINARY="target/${_HOST}/coverage/${_HOST}/release/{{TARGET}}"
+    HTML_DIR="${LF_COV_DIR}/html"
+    if [ -f "$BINARY" ]; then
+        mkdir -p "$HTML_DIR"
+        "$LLVM_COV" show \
+            "$BINARY" \
+            --instr-profile="$PROFDATA" \
+            --format=html \
+            --output-dir="$HTML_DIR" \
+            --ignore-filename-regex='\.cargo|rustc'
+        echo "libFuzzer HTML coverage report: ${HTML_DIR}/index.html"
+    else
+        echo "WARNING: binary not found — skipping HTML generation."
+        echo "  Binary: $BINARY"
+    fi
 
-    BINARY="${BINARY_DIR}/{{TARGET}}"
-
-    # Run every queue entry through the instrumented binary.
-    idx=0
-    for instance_dir in "$AFL_OUTPUT"/*/; do
-        QUEUE="${instance_dir}queue"
-        [ -d "$QUEUE" ] || continue
-        for f in "$QUEUE"/id:*; do
-            [ -f "$f" ] || continue
-            LLVM_PROFILE_FILE="${PROFRAW_DIR}/${idx}.profraw" "$BINARY" < "$f" 2>/dev/null || true
-            idx=$((idx + 1))
-        done
-    done
-
-    # Merge raw profiles.
-    PROFDATA="${COV_DIR}/merged.profdata"
-    llvm-profdata merge -sparse "${PROFRAW_DIR}"/*.profraw -o "$PROFDATA"
-
-    # Generate HTML report.
-    HTML_DIR="${COV_DIR}/html"
-    mkdir -p "$HTML_DIR"
-    llvm-cov show \
-        "$BINARY" \
-        --instr-profile="$PROFDATA" \
-        --format=html \
-        --output-dir="$HTML_DIR" \
-        --ignore-filename-regex='\.cargo|rustc'
-    echo "AFL++ HTML coverage report: ${HTML_DIR}/index.html"
-
-# Generate coverage for ALL registered fuzz targets (libFuzzer + AFL++).
-coverage-all:
+# Measure code coverage exercised by the AFL++ corpus for a single target.
+#
+# Strategy: replay corpus/afl/<TARGET>/ through the libFuzzer coverage binary
+# (built by `cargo fuzz coverage`).  Run `just afl-corpus-sync` first to
+# populate corpus/afl/<TARGET>/ from the AFL++ queue.
+#
+# Output: coverage/afl/{{TARGET}}/html/index.html
+# Usage: just coverage-afl fuzz_state_transition
+coverage-afl TARGET:
     #!/bin/bash
     set -euo pipefail
-    for target in $(cargo fuzz list 2>/dev/null); do
-        echo "=== coverage $target ==="
-        just coverage "$target"
-    done
+
+    # ── Resolve LLVM tools from the active Rust toolchain ─────────────────────
+    _SYSROOT=$(rustc --print sysroot)
+    _HOST=$(rustc -vV | sed -n 's/^host: //p')
+    _LLVM_BIN="${_SYSROOT}/lib/rustlib/${_HOST}/bin"
+    LLVM_COV="${_LLVM_BIN}/llvm-cov"
+    command -v "$LLVM_COV" &>/dev/null || LLVM_COV=$(command -v llvm-cov 2>/dev/null || true)
+    if [ -z "$LLVM_COV" ] || [ ! -x "$LLVM_COV" ]; then
+        echo "ERROR: llvm-cov not found in Rust sysroot (${_LLVM_BIN}) or PATH."
+        echo "  Run: rustup component add llvm-tools-preview"
+        exit 1
+    fi
+
+    AFL_CORPUS="corpus/afl/{{TARGET}}"
+    if [ ! -d "$AFL_CORPUS" ] || [ -z "$(ls -A "$AFL_CORPUS" 2>/dev/null)" ]; then
+        echo "No AFL++ corpus for {{TARGET}} at $AFL_CORPUS."
+        echo "  Run 'just afl-corpus-sync' after an AFL++ session to populate it."
+        exit 0
+    fi
+
+    echo "=== AFL++ corpus coverage for {{TARGET}} ==="
+
+    # ── Replay AFL++ corpus through the libFuzzer coverage binary ─────────────
+    # cargo fuzz coverage always writes:
+    #   profdata → fuzz/coverage/{{TARGET}}/coverage.profdata
+    #   binary   → target/<host>/coverage/<host>/release/{{TARGET}}
+    cargo fuzz coverage {{TARGET}} "$AFL_CORPUS"
+
+    # ── Copy profdata to the organised tree ───────────────────────────────────
+    CARGO_PROFDATA="fuzz/coverage/{{TARGET}}/coverage.profdata"
+    AFL_COV_DIR="coverage/afl/{{TARGET}}"
+    mkdir -p "$AFL_COV_DIR"
+    if [ ! -f "$CARGO_PROFDATA" ]; then
+        echo "WARNING: profdata not produced — skipping HTML generation."
+        exit 0
+    fi
+    cp "$CARGO_PROFDATA" "${AFL_COV_DIR}/coverage.profdata"
+
+    # ── Render HTML ───────────────────────────────────────────────────────────
+    BINARY="target/${_HOST}/coverage/${_HOST}/release/{{TARGET}}"
+    HTML_DIR="${AFL_COV_DIR}/html"
+    mkdir -p "$HTML_DIR"
+    if [ -f "$BINARY" ]; then
+        "$LLVM_COV" show \
+            "$BINARY" \
+            --instr-profile="${AFL_COV_DIR}/coverage.profdata" \
+            --format=html \
+            --output-dir="$HTML_DIR" \
+            --ignore-filename-regex='\.cargo|rustc'
+        echo "AFL++ corpus HTML coverage report: ${HTML_DIR}/index.html"
+    else
+        echo "WARNING: binary not found: $BINARY"
+    fi
+
+# Generate a combined coverage report for a single target (libFuzzer + AFL++).
+# Delegates to coverage-libfuzz then coverage-afl.
+# Usage: just coverage fuzz_state_transition
+coverage TARGET:
+    just coverage-libfuzz {{TARGET}} || true
+    just coverage-afl {{TARGET}}
+
+# Generate coverage for ALL registered fuzz targets.
+# ENGINE selects which fuzzer engine to measure:
+#   "all"     — libFuzzer + AFL++ (default)
+#   "libfuzz" — libFuzzer only  (cargo fuzz coverage against corpus/libfuzz/)
+#   "afl"     — AFL++ only      (cargo fuzz coverage against corpus/afl/)
+#
+# After the per-target loop, a merged summary HTML report is written:
+#   libfuzz → coverage/libfuzz/summary/html/index.html
+#   afl     → coverage/afl/summary/html/index.html
+#
+# Usage: just coverage-all              # both engines
+#        just coverage-all libfuzz      # libFuzzer only
+#        just coverage-all afl          # AFL++ only
+coverage-all ENGINE="all":
+    #!/bin/bash
+    set -euo pipefail
+
+    # ── Resolve LLVM tools from the active Rust toolchain ─────────────────────
+    _SYSROOT=$(rustc --print sysroot)
+    _HOST=$(rustc -vV | sed -n 's/^host: //p')
+    _LLVM_BIN="${_SYSROOT}/lib/rustlib/${_HOST}/bin"
+    LLVM_COV="${_LLVM_BIN}/llvm-cov"
+    LLVM_PROFDATA="${_LLVM_BIN}/llvm-profdata"
+    command -v "$LLVM_COV"      &>/dev/null || LLVM_COV=$(command -v llvm-cov 2>/dev/null || true)
+    command -v "$LLVM_PROFDATA" &>/dev/null || LLVM_PROFDATA=$(command -v llvm-profdata 2>/dev/null || true)
+
+    TARGETS=($(cargo fuzz list 2>/dev/null))
+
+    # ── Per-target passes ─────────────────────────────────────────────────────
+    # Each coverage-libfuzz / coverage-afl call copies its profdata into the
+    # organised tree (coverage/libfuzz/ or coverage/afl/) immediately after
+    # cargo-fuzz produces it.  Because the two engines write to distinct
+    # directories there is no risk of one overwriting the other's data,
+    # regardless of the order in which the targets are processed.
+    if [ "{{ENGINE}}" = "all" ] || [ "{{ENGINE}}" = "libfuzz" ]; then
+        for target in "${TARGETS[@]}"; do
+            echo "=== coverage (libfuzz) $target ==="
+            just coverage-libfuzz "$target" || true
+        done
+    fi
+    if [ "{{ENGINE}}" = "all" ] || [ "{{ENGINE}}" = "afl" ]; then
+        for target in "${TARGETS[@]}"; do
+            echo "=== coverage (afl) $target ==="
+            just coverage-afl "$target"
+        done
+    fi
+
+    # ── Merged summary report (libfuzz) ───────────────────────────────────────
+    if [ "{{ENGINE}}" = "libfuzz" ] || [ "{{ENGINE}}" = "all" ]; then
+        echo ""
+        echo "=== libFuzzer summary report (all targets merged) ==="
+        SUMMARY_DIR="coverage/libfuzz/summary"
+        mkdir -p "$SUMMARY_DIR"
+
+        PROFDATA_FILES=()
+        BINARY_ARGS=()
+        for t in "${TARGETS[@]}"; do
+            PD="coverage/libfuzz/$t/coverage.profdata"
+            BIN="target/${_HOST}/coverage/${_HOST}/release/$t"
+            [ -f "$PD"  ] && PROFDATA_FILES+=("$PD")
+            [ -f "$BIN" ] && BINARY_ARGS+=("--object" "$BIN")
+        done
+
+        if [ ${#PROFDATA_FILES[@]} -eq 0 ]; then
+            echo "No libFuzzer profdata found — skipping summary."
+        else
+            MERGED="${SUMMARY_DIR}/merged.profdata"
+            "$LLVM_PROFDATA" merge -sparse "${PROFDATA_FILES[@]}" -o "$MERGED"
+
+            HTML_DIR="${SUMMARY_DIR}/html"
+            mkdir -p "$HTML_DIR"
+            # First binary is positional; the rest are --object flags.
+            FIRST_BIN="${BINARY_ARGS[1]}"  # index 1 is the path after '--object'
+            REST_ARGS=("${BINARY_ARGS[@]:2}")
+            "$LLVM_COV" show \
+                "$FIRST_BIN" \
+                "${REST_ARGS[@]}" \
+                --instr-profile="$MERGED" \
+                --format=html \
+                --output-dir="$HTML_DIR" \
+                --ignore-filename-regex='\.cargo|rustc'
+            echo "libFuzzer summary HTML report: ${HTML_DIR}/index.html"
+        fi
+    fi
+
+    # ── Merged summary report (afl) ───────────────────────────────────────────
+    if [ "{{ENGINE}}" = "afl" ] || [ "{{ENGINE}}" = "all" ]; then
+        echo ""
+        echo "=== AFL++ corpus summary report (all targets merged) ==="
+        SUMMARY_DIR="coverage/afl/summary"
+        mkdir -p "$SUMMARY_DIR"
+
+        PROFDATA_FILES=()
+        BINARY_ARGS=()
+        for t in "${TARGETS[@]}"; do
+            PD="coverage/afl/$t/coverage.profdata"
+            BIN="target/${_HOST}/coverage/${_HOST}/release/$t"
+            [ -f "$PD"  ] && PROFDATA_FILES+=("$PD")
+            [ -f "$BIN" ] && BINARY_ARGS+=("--object" "$BIN")
+        done
+
+        if [ ${#PROFDATA_FILES[@]} -eq 0 ]; then
+            echo "No AFL++ profdata found — skipping summary."
+        else
+            MERGED="${SUMMARY_DIR}/merged.profdata"
+            "$LLVM_PROFDATA" merge -sparse "${PROFDATA_FILES[@]}" -o "$MERGED"
+
+            HTML_DIR="${SUMMARY_DIR}/html"
+            mkdir -p "$HTML_DIR"
+            FIRST_BIN="${BINARY_ARGS[1]}"
+            REST_ARGS=("${BINARY_ARGS[@]:2}")
+            "$LLVM_COV" show \
+                "$FIRST_BIN" \
+                "${REST_ARGS[@]}" \
+                --instr-profile="$MERGED" \
+                --format=html \
+                --output-dir="$HTML_DIR" \
+                --ignore-filename-regex='\.cargo|rustc'
+            echo "AFL++ corpus summary HTML report: ${HTML_DIR}/index.html"
+        fi
+    fi
 
 # ── Housekeeping ──────────────────────────────────────────────────────────────
 
@@ -425,13 +612,19 @@ clean:
 clean-artifacts:
     rm -rf fuzz/artifacts/
 
-# Remove coverage reports generated by `cargo fuzz coverage` and `just coverage`
+# Remove all coverage reports.
+# Also removes the temporary profdata that cargo-fuzz writes to fuzz/coverage/.
 clean-coverage:
-    rm -rf fuzz/coverage/ coverage/
+    rm -rf coverage/ fuzz/coverage/
 
-# Remove AFL++ output directories (crash/hang/queue findings)
+# Remove AFL++ output directories (crashes, hangs, queue).
+# Note: the queue is also stored in corpus/afl/ via `just afl-corpus-sync`.
 clean-afl:
     rm -rf afl-output/
 
-# Remove everything: builds, artifacts, coverage, and AFL++ output
-clean-all: clean clean-artifacts clean-coverage clean-afl
+# Remove the corpus directories (libFuzzer and AFL).
+clean-corpus:
+    rm -rf corpus/
+
+# Remove everything: builds, artifacts, coverage, corpus, and AFL++ output
+clean-all: clean clean-artifacts clean-coverage clean-corpus clean-afl
