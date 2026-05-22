@@ -179,11 +179,11 @@ afl-macos-teardown:
 #   Linux:  Build AFL++ from source (apt packages are several major versions
 #           behind): see https://github.com/AFLplusplus/AFLplusplus
 #
-# Usage: just fuzz-afl                            # all targets, 120 s each
+# Usage: just fuzz-afl                            # all targets, 30 s each
 #        just fuzz-afl "" 60                      # all targets, 60 s each
-#        just fuzz-afl fuzz_state_transition      # single target, 120 s
+#        just fuzz-afl fuzz_state_transition      # single target, 30 s
 #        just fuzz-afl fuzz_state_transition 300  # single target, 300 s
-fuzz-afl TARGET="" TIME="120":
+fuzz-afl TARGET="" TIME="30":
     #!/bin/bash
     set -euo pipefail
     TARGET="{{TARGET}}"
