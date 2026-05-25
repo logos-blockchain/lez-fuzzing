@@ -4,35 +4,61 @@ on:
   schedule:
     - cron: "0 2 * * *"   # nightly at 02:00 UTC
   workflow_dispatch:        # manual trigger
+  push:
+    branches:
+      - feat-add-afl-fuzzing
 
 env:
   RISC0_DEV_MODE: "1"
 
 jobs:
   # ────────────────────────────────────────────────────────────────────────────
-  # afl-smoke — 120-second campaign for 7 priority targets
+  # afl-smoke — 120-second campaign for all 15 targets
   # ────────────────────────────────────────────────────────────────────────────
   afl-smoke:
     name: "AFL++ smoke — ${{ matrix.target }}"
     runs-on: ubuntu-latest
-    container:
-      image: aflplusplus/aflplusplus:v4.40c
+
+    permissions:
+      contents: read
 
     strategy:
       fail-fast: false
       matrix:
         target:
-          - fuzz_transaction_decoding
-          - fuzz_encoding_roundtrip
-          - fuzz_state_serialization
-          - fuzz_stateless_verification
-          - fuzz_state_transition
           - fuzz_apply_state_diff_split_path
+          - fuzz_block_verification
+          - fuzz_encoding_roundtrip
+          - fuzz_multi_block_state_sequence
+          - fuzz_program_deployment_lifecycle
+          - fuzz_replay_prevention
           - fuzz_sequencer_vs_replayer
+          - fuzz_signature_verification
+          - fuzz_state_diff_computation
+          - fuzz_state_serialization
+          - fuzz_state_transition
+          - fuzz_stateless_verification
+          - fuzz_transaction_decoding
+          - fuzz_validate_execute_consistency
+          - fuzz_witness_set_verification
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Install AFL++ v4.40c from source
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y \
+            build-essential python3-dev automake cmake \
+            flex bison libglib2.0-dev libpixman-1-dev \
+            python3-setuptools ninja-build
+          git clone --depth 1 --branch v4.40c \
+            https://github.com/AFLplusplus/AFLplusplus /tmp/aflplusplus
+          cd /tmp/aflplusplus
+          make distrib
+          sudo make install
+          afl-fuzz --version
 
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
@@ -50,61 +76,49 @@ jobs:
 
       - name: Build fuzz target
         run: |
-          cd fuzz && cargo afl build \
+          cargo afl build \
+            --manifest-path fuzz/Cargo.toml \
             --no-default-features \
             --features fuzzer-afl \
             --release \
             --bin ${{ matrix.target }}
 
-      - name: Create corpus directories
-        run: |
-          mkdir -p corpus/libfuzz/${{ matrix.target }}
-          mkdir -p corpus/afl/${{ matrix.target }}
-
-      - name: Run AFL++ for 120 seconds
-        run: |
-          mkdir -p afl-output/${{ matrix.target }}
-          timeout 120 \
-            afl-fuzz \
-              -i corpus/libfuzz/${{ matrix.target }} \
-              -o afl-output/${{ matrix.target }} \
-              -- fuzz/target/release/${{ matrix.target }} \
-          || true   # timeout exit code 124 is expected
-
-      - name: Sync queue entries to AFL corpus
+      - name: Prepare seed corpus
         run: |
           TARGET="${{ matrix.target }}"
-          DEST="corpus/afl/${TARGET}"
-          mkdir -p "$DEST"
-          count=0
-          for instance_dir in afl-output/${TARGET}/*/; do
-            QUEUE="${instance_dir}queue"
-            [ -d "$QUEUE" ] || continue
-            for f in "$QUEUE"/id:*; do
+          SEEDS="afl-seeds/${TARGET}"
+          mkdir -p "$SEEDS"
+          # Merge checked-in libFuzzer corpus and accumulated AFL corpus
+          for src in corpus/libfuzz/${TARGET} corpus/afl/${TARGET}; do
+            [ -d "$src" ] || continue
+            for f in "$src"/*; do
               [ -f "$f" ] || continue
-              HASH=$(sha1sum "$f" | cut -d' ' -f1)
-              DEST_FILE="${DEST}/${HASH}"
-              if [ ! -f "$DEST_FILE" ]; then
-                cp "$f" "$DEST_FILE"
-                count=$((count + 1))
-              fi
+              cp -n "$f" "$SEEDS/" 2>/dev/null || true
             done
           done
-          echo "Synced ${count} new input(s) to ${DEST}"
+          # Guarantee at least one seed so afl-fuzz does not abort
+          if [ -z "$(ls -A "$SEEDS")" ]; then
+            echo -n "seed" > "$SEEDS/default_seed"
+          fi
+          echo "Seed inputs: $(ls "$SEEDS" | wc -l)"
 
-      - name: Open corpus PR (if new inputs found)
-        uses: peter-evans/create-pull-request@v6
-        with:
-          commit-message: "chore: add AFL++ corpus entries for ${{ matrix.target }}"
-          title: "AFL++ corpus update — ${{ matrix.target }}"
-          body: |
-            Automated corpus update from the nightly AFL++ smoke run.
-            Target: `${{ matrix.target }}`
-          branch: "afl-corpus/${{ matrix.target }}"
-          add-paths: "corpus/afl/${{ matrix.target }}/"
-          delete-branch: true
+      - name: Run AFL++ for 120 seconds
+        env:
+          AFL_SKIP_CPUFREQ: "1"
+          AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES: "1"
+        run: |
+          TARGET="${{ matrix.target }}"
+          mkdir -p afl-output/${TARGET}
+          timeout 120 \
+            afl-fuzz \
+              -i afl-seeds/${TARGET} \
+              -o afl-output/${TARGET} \
+              -- fuzz/target/release/${TARGET}
+          rc=$?
+          # 124 = SIGALRM from timeout (expected); 0 = clean exit; anything else is a real failure
+          [ $rc -eq 0 ] || [ $rc -eq 124 ] || exit $rc
 
-      - name: Upload crashes and hangs artifact
+      - name: Upload crashes, hangs, and queue artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -112,10 +126,11 @@ jobs:
           path: |
             afl-output/${{ matrix.target }}/*/crashes/
             afl-output/${{ matrix.target }}/*/hangs/
+            afl-output/${{ matrix.target }}/*/queue/
           if-no-files-found: ignore
 
   # ────────────────────────────────────────────────────────────────────────────
-  # afl-coverage — LLVM coverage report for 3 key targets
+  # afl-coverage — LLVM coverage report for all 15 targets
   # ────────────────────────────────────────────────────────────────────────────
   afl-coverage:
     name: "AFL++ coverage — ${{ matrix.target }}"
@@ -126,9 +141,21 @@ jobs:
       fail-fast: false
       matrix:
         target:
-          - fuzz_state_transition
-          - fuzz_sequencer_vs_replayer
           - fuzz_apply_state_diff_split_path
+          - fuzz_block_verification
+          - fuzz_encoding_roundtrip
+          - fuzz_multi_block_state_sequence
+          - fuzz_program_deployment_lifecycle
+          - fuzz_replay_prevention
+          - fuzz_sequencer_vs_replayer
+          - fuzz_signature_verification
+          - fuzz_state_diff_computation
+          - fuzz_state_serialization
+          - fuzz_state_transition
+          - fuzz_stateless_verification
+          - fuzz_transaction_decoding
+          - fuzz_validate_execute_consistency
+          - fuzz_witness_set_verification
 
     steps:
       - name: Checkout repository
@@ -139,15 +166,12 @@ jobs:
         with:
           components: llvm-tools-preview
 
-      - name: Install cargo-afl
-        run: cargo install cargo-afl --locked
-
       - name: Download smoke findings for ${{ matrix.target }}
         uses: actions/download-artifact@v4
         with:
           name: afl-findings-${{ matrix.target }}
           path: afl-output/${{ matrix.target }}
-        continue-on-error: true   # no crashes/hangs is fine
+        continue-on-error: true   # no crashes/hangs/queue is fine
 
       - name: Build with LLVM instrumented coverage
         env:
@@ -170,13 +194,20 @@ jobs:
           idx=0
 
           # libFuzzer corpus (checked-in)
-          for f in corpus/libfuzz/${TARGET}/id:* corpus/libfuzz/${TARGET}/*; do
+          for f in corpus/libfuzz/${TARGET}/*; do
             [ -f "$f" ] || continue
             LLVM_PROFILE_FILE="${PROFRAW_DIR}/${idx}.profraw" "$BINARY" < "$f" 2>/dev/null || true
             idx=$((idx + 1))
           done
 
-          # AFL++ queue entries (if available from the smoke job)
+          # AFL corpus (checked-in, accumulated from prior runs)
+          for f in corpus/afl/${TARGET}/*; do
+            [ -f "$f" ] || continue
+            LLVM_PROFILE_FILE="${PROFRAW_DIR}/${idx}.profraw" "$BINARY" < "$f" 2>/dev/null || true
+            idx=$((idx + 1))
+          done
+
+          # AFL++ queue entries from today's smoke run (downloaded artifact)
           for instance_dir in afl-output/${TARGET}/*/; do
             QUEUE="${instance_dir}queue"
             [ -d "$QUEUE" ] || continue
@@ -193,13 +224,14 @@ jobs:
           TARGET="${{ matrix.target }}"
           PROFRAW_DIR="coverage/afl/${TARGET}/profraw"
           PROFDATA="coverage/afl/${TARGET}/merged.profdata"
+          LLVM_PROFDATA="$(rustup which llvm-profdata)"
           shopt -s nullglob
           files=("${PROFRAW_DIR}"/*.profraw)
           if [ ${#files[@]} -eq 0 ]; then
             echo "No .profraw files found — skipping merge."
             exit 0
           fi
-          llvm-profdata merge -sparse "${files[@]}" -o "$PROFDATA"
+          "$LLVM_PROFDATA" merge -sparse "${files[@]}" -o "$PROFDATA"
 
       - name: Generate HTML coverage report
         run: |
@@ -207,12 +239,13 @@ jobs:
           BINARY="fuzz/target/release/${TARGET}"
           PROFDATA="coverage/afl/${TARGET}/merged.profdata"
           HTML_DIR="coverage/afl/${TARGET}/html"
+          LLVM_COV="$(rustup which llvm-cov)"
           if [ ! -f "$PROFDATA" ]; then
             echo "No profdata — skipping HTML report."
             exit 0
           fi
           mkdir -p "$HTML_DIR"
-          llvm-cov show \
+          "$LLVM_COV" show \
             "$BINARY" \
             --instr-profile="$PROFDATA" \
             --format=html \
