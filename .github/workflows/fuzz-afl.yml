@@ -46,6 +46,20 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Checkout logos-execution-zone alongside lez-fuzzing
+        uses: actions/checkout@v4
+        with:
+          repository: logos-blockchain/logos-execution-zone
+          path: logos-execution-zone
+
+      - name: Symlink logos-execution-zone to sibling directory
+        run: ln -s "$GITHUB_WORKSPACE/logos-execution-zone" "$GITHUB_WORKSPACE/../logos-execution-zone"
+
+      - name: Install logos-blockchain-circuits
+        uses: ./logos-execution-zone/.github/actions/install-logos-blockchain-circuits
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Install AFL++ v4.40c from source
         run: |
           sudo apt-get update -q
@@ -160,6 +174,20 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Checkout logos-execution-zone alongside lez-fuzzing
+        uses: actions/checkout@v4
+        with:
+          repository: logos-blockchain/logos-execution-zone
+          path: logos-execution-zone
+
+      - name: Symlink logos-execution-zone to sibling directory
+        run: ln -s "$GITHUB_WORKSPACE/logos-execution-zone" "$GITHUB_WORKSPACE/../logos-execution-zone"
+
+      - name: Install logos-blockchain-circuits
+        uses: ./logos-execution-zone/.github/actions/install-logos-blockchain-circuits
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install Rust nightly + llvm-tools-preview
         uses: dtolnay/rust-toolchain@nightly
