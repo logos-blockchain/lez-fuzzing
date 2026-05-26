@@ -358,7 +358,9 @@ jobs:
           TARGET="${{ matrix.target }}"
           PROFRAW_DIR="coverage/afl/${TARGET}/profraw"
           PROFDATA="coverage/afl/${TARGET}/merged.profdata"
-          LLVM_PROFDATA="$(rustup which llvm-profdata)"
+          SYSROOT="$(rustc --print sysroot)"
+          HOST_TRIPLE="$(rustc -vV | awk '/^host:/{print $2}')"
+          LLVM_PROFDATA="${SYSROOT}/lib/rustlib/${HOST_TRIPLE}/bin/llvm-profdata"
           shopt -s nullglob
           files=("${PROFRAW_DIR}"/*.profraw)
           if [ ${#files[@]} -eq 0 ]; then
@@ -373,7 +375,9 @@ jobs:
           BINARY="fuzz/target/release/${TARGET}"
           PROFDATA="coverage/afl/${TARGET}/merged.profdata"
           HTML_DIR="coverage/afl/${TARGET}/html"
-          LLVM_COV="$(rustup which llvm-cov)"
+          SYSROOT="$(rustc --print sysroot)"
+          HOST_TRIPLE="$(rustc -vV | awk '/^host:/{print $2}')"
+          LLVM_COV="${SYSROOT}/lib/rustlib/${HOST_TRIPLE}/bin/llvm-cov"
           if [ ! -f "$PROFDATA" ]; then
             echo "No profdata — skipping HTML report."
             exit 0
