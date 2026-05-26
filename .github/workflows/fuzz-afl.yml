@@ -77,14 +77,6 @@ jobs:
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache fuzz/target
-        uses: actions/cache@v4
-        with:
-          path: fuzz/target
-          key: afl-fuzz-target-${{ matrix.target }}-${{ hashFiles('fuzz/Cargo.lock') }}
-          restore-keys: |
-            afl-fuzz-target-${{ matrix.target }}-
-
       - name: Install cargo-afl
         run: cargo install cargo-afl --locked
 
