@@ -136,6 +136,98 @@ jobs:
           # 124 = SIGALRM from timeout (expected); 0 = clean exit; anything else is a real failure
           [ $rc -eq 0 ] || [ $rc -eq 124 ] || exit $rc
 
+      - name: Calculate and show edge bitmap coverage
+        if: always()
+        run: |
+          TARGET="${{ matrix.target }}"
+          MAP_SIZE=65536
+
+          # ── Method 1: bitmap_cvg from fuzzer_stats (written live by afl-fuzz) ──
+          STATS="afl-output/${TARGET}/default/fuzzer_stats"
+          if [ -f "$STATS" ]; then
+            cvg=$(grep '^bitmap_cvg' "$STATS" | awk '{print $3}')
+            filled_stat=$(grep '^edges_found' "$STATS" | awk '{print $3}' || echo "n/a")
+          else
+            cvg="n/a"
+            filled_stat="n/a"
+          fi
+
+          # ── Method 2: afl-showmap union over checked-in corpus ──
+          CORPUS="corpus/afl/${TARGET}"
+          BINARY="fuzz/target/release/${TARGET}"
+          showmap_filled="n/a"
+          showmap_pct="n/a"
+          if [ -d "$CORPUS" ] && [ -f "$BINARY" ]; then
+            afl-showmap -C \
+              -i "$CORPUS" \
+              -o "afl-edges-${TARGET}.txt" \
+              -- "$BINARY" 2>/dev/null || true
+            if [ -f "afl-edges-${TARGET}.txt" ]; then
+              showmap_filled=$(wc -l < "afl-edges-${TARGET}.txt" | tr -d ' ')
+              showmap_pct=$(echo "scale=2; ${showmap_filled} * 100 / ${MAP_SIZE}" | bc)
+            fi
+          fi
+
+          # ── ASCII bitmap visualisation (64×64 grid, one cell = 1024 slots) ──
+          # Each of the 4096 cells represents 16 consecutive bitmap slots.
+          # Cell is '■' if ANY of its 16 slots is non-zero, '·' otherwise.
+          EDGE_FILE="afl-edges-${TARGET}.txt"
+          CELLS=64          # 64 cells wide × 64 tall = 4096 cells × 16 slots = 65536
+          SLOTS_PER_CELL=16
+          if [ -f "$EDGE_FILE" ]; then
+            python3 - "$EDGE_FILE" "$CELLS" "$SLOTS_PER_CELL" <<'PYEOF'
+          import sys, math
+
+          edge_file   = sys.argv[1]
+          cells       = int(sys.argv[2])   # cells per row
+          spc         = int(sys.argv[3])   # slots per cell
+          MAP_SIZE    = 65536
+          total_cells = cells * cells      # 4096
+
+          hit = set()
+          with open(edge_file) as f:
+              for line in f:
+                  line = line.strip()
+                  if ':' in line:
+                      slot = int(line.split(':')[0])
+                      hit.add(slot)
+
+          print(f"\nEdge bitmap visualisation — {cells}×{cells} grid "
+                f"(each cell = {spc} slots, ■=any hit, ·=none)")
+          print("+" + "─" * (cells * 2 - 1) + "+")
+          for row in range(cells):
+              row_str = ""
+              for col in range(cells):
+                  cell_idx   = row * cells + col
+                  slot_start = cell_idx * spc
+                  slot_end   = slot_start + spc
+                  filled = any(s in hit for s in range(slot_start, slot_end))
+                  row_str += ("■" if filled else "·") + " "
+              print("|" + row_str.rstrip() + "|")
+          print("+" + "─" * (cells * 2 - 1) + "+")
+
+          filled_cells = sum(
+              1 for c in range(total_cells)
+              if any((c * spc + s) in hit for s in range(spc))
+          )
+          print(f"Cells filled: {filled_cells}/{total_cells} "
+                f"({filled_cells*100/total_cells:.1f}%)\n")
+          PYEOF
+          fi
+
+          # ── GitHub Step Summary ──
+          {
+            echo "## Edge Bitmap Coverage — \`${TARGET}\`"
+            echo ""
+            echo "| Method | Filled slots | Bitmap filled % |"
+            echo "|---|---|---|"
+            echo "| \`fuzzer_stats\` (afl-fuzz live) | ${filled_stat} | **${cvg}** |"
+            echo "| \`afl-showmap\` (corpus union)   | ${showmap_filled} | **${showmap_pct}%** |"
+            echo ""
+            echo "> MAP_SIZE = ${MAP_SIZE} slots (2¹⁶). "
+            echo "> A slot is filled when any corpus input exercises that program edge."
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Package AFL findings into tarball
         if: always()
         run: |
