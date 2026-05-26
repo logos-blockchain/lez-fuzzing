@@ -2,7 +2,7 @@ name: Fuzzing
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, develop, feat-add-afl-fuzzing]
   pull_request:
   schedule:
     # Nightly full run
@@ -79,6 +79,77 @@ jobs:
           cargo fuzz run ${{ matrix.target }} \
             corpus/libfuzz/${{ matrix.target }} \
             -- -max_total_time=60 -jobs=2 -workers=2
+
+      - name: Calculate and show edge bitmap coverage
+        if: always()
+        run: |
+          TARGET="${{ matrix.target }}"
+          CORPUS="corpus/libfuzz/${TARGET}"
+          mkdir -p "$CORPUS"
+
+          # ── Build and replay the corpus with LLVM coverage instrumentation ──
+          cargo fuzz coverage "$TARGET" "$CORPUS" 2>/dev/null || true
+
+          # ── Locate llvm-cov from the installed nightly toolchain ──
+          SYSROOT="$(rustc --print sysroot)"
+          HOST_TRIPLE="$(rustc -vV | awk '/^host:/{print $2}')"
+          LLVM_COV="${SYSROOT}/lib/rustlib/${HOST_TRIPLE}/bin/llvm-cov"
+
+          PROFDATA=$(find fuzz/coverage/"$TARGET" -name "coverage.profdata" 2>/dev/null | head -1)
+          BINARY=$(find fuzz/target -name "$TARGET" -type f -perm /111 2>/dev/null | grep release | head -1)
+
+          branches_covered="n/a"
+          branches_total="n/a"
+          pct="n/a"
+
+          if [ -n "$PROFDATA" ] && [ -f "$PROFDATA" ] && \
+             [ -n "$BINARY" ]   && [ -f "$BINARY" ]; then
+            JSON=$("$LLVM_COV" export "$BINARY" \
+              --instr-profile="$PROFDATA" \
+              --summary-only \
+              --ignore-filename-regex='\.cargo|rustc' 2>/dev/null || echo "{}")
+
+            branches_covered=$(echo "$JSON" | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          try:
+              br = data['data'][0]['totals']['branches']
+              print(br['covered'])
+          except Exception:
+              print('n/a')
+          ")
+            branches_total=$(echo "$JSON" | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          try:
+              br = data['data'][0]['totals']['branches']
+              print(br['count'])
+          except Exception:
+              print('n/a')
+          ")
+            pct=$(echo "$JSON" | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          try:
+              br = data['data'][0]['totals']['branches']
+              print(f\"{br['percent']:.2f}\")
+          except Exception:
+              print('n/a')
+          ")
+          fi
+
+          echo "Branch coverage: ${branches_covered}/${branches_total} (${pct}%)"
+
+          # ── GitHub Step Summary ──
+          {
+            echo "## Edge Bitmap Coverage — \`${TARGET}\`"
+            echo ""
+            echo "| Method | Covered branches | Total branches | Coverage % |"
+            echo "|---|---|---|---|"
+            echo "| \`llvm-cov\` (libFuzzer corpus) | ${branches_covered} | ${branches_total} | **${pct}%** |"
+            echo ""
+            echo "> Coverage computed over \`${CORPUS}\` using LLVM source-based branch instrumentation."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload crash artifacts
         if: failure()
