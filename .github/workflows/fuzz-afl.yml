@@ -123,24 +123,41 @@ jobs:
         run: |
           TARGET="${{ matrix.target }}"
           mkdir -p afl-output/${TARGET}
+          # Disable errexit so that timeout's exit code 124 (expected signal) does not
+          # cause bash -e to abort the script before the guard below can run.
+          set +e
           timeout 120 \
             afl-fuzz \
               -i afl-seeds/${TARGET} \
               -o afl-output/${TARGET} \
               -- fuzz/target/release/${TARGET}
           rc=$?
+          set -e
           # 124 = SIGALRM from timeout (expected); 0 = clean exit; anything else is a real failure
           [ $rc -eq 0 ] || [ $rc -eq 124 ] || exit $rc
 
-      - name: Upload crashes, hangs, and queue artifact
+      - name: Package AFL findings into tarball
+        if: always()
+        run: |
+          TARGET="${{ matrix.target }}"
+          OUTPUT="afl-output/${TARGET}"
+          # AFL++ queue/crash/hang filenames contain colons, which are forbidden by
+          # actions/upload-artifact on NTFS-based runners.  Bundle everything into a
+          # single tarball so the colon-bearing filenames never appear as individual
+          # artifact entries.
+          if [ -d "$OUTPUT" ]; then
+            tar -czf "afl-findings-${TARGET}.tar.gz" \
+              -C "$(dirname "$OUTPUT")" "$(basename "$OUTPUT")"
+          else
+            tar -czf "afl-findings-${TARGET}.tar.gz" -T /dev/null
+          fi
+
+      - name: Upload AFL findings artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: afl-findings-${{ matrix.target }}
-          path: |
-            afl-output/${{ matrix.target }}/*/crashes/
-            afl-output/${{ matrix.target }}/*/hangs/
-            afl-output/${{ matrix.target }}/*/queue/
+          path: afl-findings-${{ matrix.target }}.tar.gz
           if-no-files-found: ignore
 
   # ────────────────────────────────────────────────────────────────────────────
@@ -198,8 +215,16 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: afl-findings-${{ matrix.target }}
-          path: afl-output/${{ matrix.target }}
+          path: .
         continue-on-error: true   # no crashes/hangs/queue is fine
+
+      - name: Extract AFL findings tarball
+        run: |
+          TARGET="${{ matrix.target }}"
+          TARBALL="afl-findings-${TARGET}.tar.gz"
+          if [ -f "$TARBALL" ]; then
+            tar -xzf "$TARBALL"
+          fi
 
       - name: Build with LLVM instrumented coverage
         env:
