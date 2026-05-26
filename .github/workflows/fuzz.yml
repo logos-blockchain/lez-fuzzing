@@ -84,15 +84,19 @@ jobs:
           mkdir -p "$CORPUS"
 
           # ── Build and replay the corpus with LLVM coverage instrumentation ──
-          cargo fuzz coverage "$TARGET" "$CORPUS" 2>/dev/null || true
+          # cargo fuzz coverage builds into fuzz/target/<triple>/coverage/<target>
+          # and writes the merged profdata to fuzz/coverage/<target>/coverage.profdata
+          cargo fuzz coverage "$TARGET" "$CORPUS" || true
 
           # ── Locate llvm-cov from the installed nightly toolchain ──
           SYSROOT="$(rustc --print sysroot)"
           HOST_TRIPLE="$(rustc -vV | awk '/^host:/{print $2}')"
           LLVM_COV="${SYSROOT}/lib/rustlib/${HOST_TRIPLE}/bin/llvm-cov"
 
+          # The coverage-instrumented binary lives under a "coverage" profile directory,
+          # NOT "release" — search specifically for that path.
           PROFDATA=$(find fuzz/coverage/"$TARGET" -name "coverage.profdata" 2>/dev/null | head -1)
-          BINARY=$(find fuzz/target -name "$TARGET" -type f -perm /111 2>/dev/null | grep release | head -1)
+          BINARY=$(find fuzz/target -path "*coverage/${TARGET}" -type f 2>/dev/null | head -1)
 
           branches_covered="n/a"
           branches_total="n/a"
