@@ -231,10 +231,14 @@ jobs:
           RUSTFLAGS: "-C instrument-coverage"
           RISC0_DEV_MODE: "1"
         run: |
+          # Build with the libfuzzer harness: libFuzzer accepts corpus files as
+          # positional arguments, runs each through the fuzz closure once, then
+          # exits — LLVM coverage counters (-C instrument-coverage) are flushed
+          # to the .profraw file on exit regardless of the fuzzer runtime used.
           cargo build \
             --manifest-path fuzz/Cargo.toml \
             --no-default-features \
-            --features fuzzer-afl \
+            --features fuzzer-libfuzzer \
             --release \
             --bin ${{ matrix.target }}
 
@@ -246,17 +250,10 @@ jobs:
           mkdir -p "$PROFRAW_DIR"
           idx=0
 
-          # libFuzzer corpus (checked-in)
-          for f in corpus/libfuzz/${TARGET}/*; do
-            [ -f "$f" ] || continue
-            LLVM_PROFILE_FILE="${PROFRAW_DIR}/${idx}.profraw" "$BINARY" < "$f" 2>/dev/null || true
-            idx=$((idx + 1))
-          done
-
           # AFL corpus (checked-in, accumulated from prior runs)
           for f in corpus/afl/${TARGET}/*; do
             [ -f "$f" ] || continue
-            LLVM_PROFILE_FILE="${PROFRAW_DIR}/${idx}.profraw" "$BINARY" < "$f" 2>/dev/null || true
+            LLVM_PROFILE_FILE="${PROFRAW_DIR}/${idx}.profraw" "$BINARY" "$f" 2>/dev/null || true
             idx=$((idx + 1))
           done
 
@@ -266,7 +263,7 @@ jobs:
             [ -d "$QUEUE" ] || continue
             for f in "$QUEUE"/id:*; do
               [ -f "$f" ] || continue
-              LLVM_PROFILE_FILE="${PROFRAW_DIR}/${idx}.profraw" "$BINARY" < "$f" 2>/dev/null || true
+              LLVM_PROFILE_FILE="${PROFRAW_DIR}/${idx}.profraw" "$BINARY" "$f" 2>/dev/null || true
               idx=$((idx + 1))
             done
           done
