@@ -43,6 +43,7 @@ clippy.absolute-paths                = "allow"
 clippy.min-ident-chars               = "allow"
 clippy.indexing-slicing              = "allow"
 clippy.little-endian-bytes           = "allow"
+clippy.self-named-module-files       = "allow"
 
 [workspace.lints.rust]
 unsafe_code = "deny"
