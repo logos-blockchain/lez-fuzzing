@@ -11,6 +11,7 @@ use testnet_initial_state::initial_pub_accounts_private_keys;
 /// Extract the [`AccountId`]s of all signers from a transaction's
 /// witness set.  Used by fuzz targets that need to verify nonce
 /// increments after `execute_check_on_state`.
+#[must_use]
 pub fn signer_account_ids(tx: &common::transaction::NSSATransaction) -> Vec<nssa::AccountId> {
     use common::transaction::NSSATransaction;
     match tx {
@@ -52,15 +53,15 @@ pub struct FuzzAccount {
 /// has a shape controlled by the fuzzer rather than fixed at compile time.
 pub fn arbitrary_fuzz_state(u: &mut Unstructured<'_>) -> arbitrary::Result<Vec<FuzzAccount>> {
     let n = ((u8::arbitrary(u)? as usize) % 8) + 1; // 1..=8
-    (0..n)
-        .map(|_| {
-            Ok(FuzzAccount {
-                account_id: ArbAccountId::arbitrary(u)?.0,
-                balance: u128::arbitrary(u)?,
-                private_key: ArbPrivateKey::arbitrary(u)?.0,
-            })
+    std::iter::repeat_with(|| {
+        Ok(FuzzAccount {
+            account_id: ArbAccountId::arbitrary(u)?.0,
+            balance: u128::arbitrary(u)?,
+            private_key: ArbPrivateKey::arbitrary(u)?.0,
         })
-        .collect()
+    })
+    .take(n)
+    .collect()
 }
 
 /// Generate a native-transfer [`NSSATransaction`] between two accounts chosen
@@ -115,8 +116,8 @@ prop_compose! {
     )(
         from_idx in 0..accounts.len(),
         to_idx   in 0..accounts.len(),
-        nonce    in 0u128..1_000u128,
-        amount   in 0u128..10_000u128,
+        nonce    in 0_u128..1_000_u128,
+        amount   in 0_u128..10_000_u128,
     ) -> NSSATransaction {
         let (from_id, from_key) = &accounts[from_idx];
         let (to_id, _)          = &accounts[to_idx];
@@ -127,6 +128,7 @@ prop_compose! {
 }
 
 /// Return the test accounts from `testnet_initial_state` as `(AccountId, PrivateKey)` pairs.
+#[must_use]
 pub fn test_accounts() -> Vec<(AccountId, PrivateKey)> {
     initial_pub_accounts_private_keys()
         .into_iter()
@@ -168,9 +170,9 @@ prop_compose! {
     /// the state is left unchanged on rejection (StateIsolationOnFailure).
     pub fn arb_invalid_account_state_tx()(
         // Use a random 32-byte seed as a "phantom" account id not in genesis
-        phantom_id_bytes in proptest::array::uniform32(0u8..),
+        phantom_id_bytes in proptest::array::uniform32(0_u8..),
         amount in (u128::MAX / 2)..u128::MAX,   // overflow-inducing amount
-        nonce  in 0u128..10u128,
+        nonce  in 0_u128..10_u128,
     ) -> NSSATransaction {
         let phantom_id = nssa::AccountId::new(phantom_id_bytes);
         // Attempt to sign with a key that has no matching on-chain account
@@ -216,14 +218,14 @@ pub fn arb_duplicate_tx_sequence() -> impl Strategy<Value = Vec<NSSATransaction>
 pub fn arb_pathological_sequence() -> impl Strategy<Value = Vec<NSSATransaction>> {
     let accounts = test_accounts();
     let n = accounts.len();
-    proptest::collection::vec((0..n, 0..n, 0u128..5u128, any::<bool>()), 1..8_usize).prop_map(
+    proptest::collection::vec((0..n, 0..n, 0_u128..5_u128, any::<bool>()), 1..8_usize).prop_map(
         move |params| {
             params
                 .into_iter()
                 .map(|(from_idx, to_idx, nonce, zero_amount)| {
                     let (from_id, from_key) = &accounts[from_idx];
                     let (to_id, _) = &accounts[to_idx];
-                    let amount = if zero_amount { 0u128 } else { u128::MAX }; // 0 or overflow
+                    let amount = if zero_amount { 0_u128 } else { u128::MAX }; // 0 or overflow
                     common::test_utils::create_transaction_native_token_transfer(
                         *from_id, nonce, *to_id, amount, from_key,
                     )

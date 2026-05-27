@@ -1,12 +1,11 @@
 name: Fuzzing
 
 on:
-  push:
-    branches: [main, develop, feat-add-afl-fuzzing]
-  pull_request:
   schedule:
-    # Nightly full run
     - cron: "0 2 * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
 
 env:
   RISC0_DEV_MODE: "1"

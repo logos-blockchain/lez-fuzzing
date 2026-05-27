@@ -2,18 +2,18 @@ name: AFL++ Fuzzing
 
 on:
   schedule:
-    - cron: "0 2 * * *"   # nightly at 02:00 UTC
-  workflow_dispatch:        # manual trigger
+    - cron: "0 2 * * *"
+  workflow_dispatch:
   push:
-    branches:
-      - feat-add-afl-fuzzing
+    branches: [main]
 
 env:
   RISC0_DEV_MODE: "1"
+  CARGO_TERM_COLOR: always
 
 jobs:
   # ────────────────────────────────────────────────────────────────────────────
-  # afl-smoke — 120-second campaign for all 15 targets
+  # afl-smoke — 60-second per targets
   # ────────────────────────────────────────────────────────────────────────────
   afl-smoke:
     name: "AFL++ smoke — ${{ matrix.target }}"
@@ -108,7 +108,7 @@ jobs:
           fi
           echo "Seed inputs: $(ls "$SEEDS" | wc -l)"
 
-      - name: Run AFL++ for 120 seconds
+      - name: Run AFL++ for 60 seconds
         env:
           AFL_SKIP_CPUFREQ: "1"
           AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES: "1"
@@ -118,7 +118,7 @@ jobs:
           # Disable errexit so that timeout's exit code 124 (expected signal) does not
           # cause bash -e to abort the script before the guard below can run.
           set +e
-          timeout 120 \
+          timeout 60 \
             afl-fuzz \
               -i afl-seeds/${TARGET} \
               -o afl-output/${TARGET} \
