@@ -1,4 +1,4 @@
-#![no_main]
+#![cfg_attr(feature = "fuzzer-libfuzzer", no_main)]
 //! Fuzz target: state diff isolation — bidirectional.
 //!
 //! Invariants:
@@ -22,10 +22,9 @@ use arbitrary::{Arbitrary, Unstructured};
 use common::transaction::NSSATransaction;
 use fuzz_props::arbitrary_types::ArbPublicTransaction;
 use fuzz_props::generators::arbitrary_fuzz_state;
-use libfuzzer_sys::fuzz_target;
 use nssa::{V03State, ValidatedStateDiff};
 
-fuzz_target!(|data: &[u8]| {
+fuzz_props::fuzz_entry!(|data: &[u8]| {
     let mut u = Unstructured::new(data);
 
     // Generate a fuzz-driven initial state.

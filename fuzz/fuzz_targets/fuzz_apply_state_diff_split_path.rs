@@ -1,4 +1,4 @@
-#![no_main]
+#![cfg_attr(feature = "fuzzer-libfuzzer", no_main)]
 //! Fuzz target: `validate_on_state` → `apply_state_diff` split path vs
 //! `execute_check_on_state` direct path.
 //!
@@ -33,14 +33,12 @@
 use std::collections::HashSet;
 
 use arbitrary::{Arbitrary, Unstructured};
-use common::transaction::NSSATransaction;
 use fuzz_props::arbitrary_types::ArbNSSATransaction;
-use fuzz_props::generators::arbitrary_fuzz_state;
+use fuzz_props::generators::{arbitrary_fuzz_state, signer_account_ids};
 use fuzz_props::invariants::{NonceSnapshot, assert_nonce_increment_correctness};
-use libfuzzer_sys::fuzz_target;
 use nssa::V03State;
 
-fuzz_target!(|data: &[u8]| {
+fuzz_props::fuzz_entry!(|data: &[u8]| {
     let mut u = Unstructured::new(data);
 
     // Generate a fuzz-driven initial state.
@@ -75,23 +73,7 @@ fuzz_target!(|data: &[u8]| {
     };
 
     // ── Extract signer IDs and capture nonce snapshot before apply ────────────
-    // Signer IDs are private to ValidatedStateDiff; derive them from the transaction's
-    // witness set before the diff is consumed by apply_state_diff.
-    let signer_ids: Vec<nssa::AccountId> = match &tx {
-        NSSATransaction::Public(pub_tx) => pub_tx
-            .witness_set()
-            .signatures_and_public_keys()
-            .iter()
-            .map(|(_, pk)| nssa::AccountId::from(pk))
-            .collect(),
-        NSSATransaction::PrivacyPreserving(pp_tx) => pp_tx
-            .witness_set()
-            .signatures_and_public_keys()
-            .iter()
-            .map(|(_, pk)| nssa::AccountId::from(pk))
-            .collect(),
-        NSSATransaction::ProgramDeployment(_) => vec![],
-    };
+    let signer_ids = signer_account_ids(&tx);
     let nonces_before = NonceSnapshot(
         signer_ids
             .iter()

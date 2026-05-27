@@ -1,12 +1,11 @@
 name: Fuzzing
 
 on:
-  push:
-    branches: [main, develop]
-  pull_request:
   schedule:
-    # Nightly full run
     - cron: "0 2 * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
 
 env:
   RISC0_DEV_MODE: "1"
@@ -39,14 +38,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Checkout logos-execution-zone alongside lez-fuzzing
-        uses: actions/checkout@v4
-        with:
-          repository: logos-blockchain/logos-execution-zone
-          path: logos-execution-zone
-
-      - name: Symlink logos-execution-zone to sibling directory
-        run: ln -s "$GITHUB_WORKSPACE/logos-execution-zone" "$GITHUB_WORKSPACE/../logos-execution-zone"
+      - name: Checkout logos-execution-zone
+        uses: ./.github/actions/checkout-lez
 
       - name: Install Rust nightly (required by cargo-fuzz)
         uses: dtolnay/rust-toolchain@nightly
@@ -75,8 +68,125 @@ jobs:
 
       - name: Run smoke fuzz (60 s)
         run: |
+          mkdir -p corpus/libfuzz/${{ matrix.target }}
           cargo fuzz run ${{ matrix.target }} \
+            corpus/libfuzz/${{ matrix.target }} \
             -- -max_total_time=60 -jobs=2 -workers=2
+
+      - name: Calculate and show edge bitmap coverage
+        if: always()
+        run: |
+          TARGET="${{ matrix.target }}"
+          CORPUS="corpus/libfuzz/${TARGET}"
+          mkdir -p "$CORPUS"
+
+          # ── Build and replay the corpus with LLVM coverage instrumentation ──
+          # Capture output so we can parse the libFuzzer edge-bitmap lines.
+          # cargo fuzz coverage builds into fuzz/target/<triple>/coverage/<target>
+          # and writes the merged profdata to fuzz/coverage/<target>/coverage.profdata
+          COVERAGE_LOG=$(cargo fuzz coverage "$TARGET" "$CORPUS" 2>&1 || true)
+          echo "$COVERAGE_LOG"
+
+          # ── Extract libFuzzer edge-bitmap metrics from the merge log ──
+          #   Total edges:   "INFO: Loaded 1 modules   (N inline 8-bit counters)"
+          #   Covered edges: "MERGE-OUTER: ... N new coverage edges"
+          edge_total=$(echo "$COVERAGE_LOG" \
+            | grep -oP '(?<=Loaded 1 modules\s{1,10}\()\d+(?= inline 8-bit counters)' \
+            | tail -1)
+          edge_covered=$(echo "$COVERAGE_LOG" \
+            | grep -oP '\d+(?= new coverage edges)' \
+            | tail -1)
+
+          if [ -n "$edge_total" ] && [ -n "$edge_covered" ] && [ "$edge_total" -gt 0 ]; then
+            edge_pct=$(python3 -c "print(f'{100*${edge_covered}/${edge_total}:.2f}')")
+          else
+            edge_pct="n/a"
+          fi
+          [ -z "$edge_total"   ] && edge_total="n/a"
+          [ -z "$edge_covered" ] && edge_covered="n/a"
+
+          echo "Edge bitmap: ${edge_covered}/${edge_total} (${edge_pct}%)"
+
+          # ── Locate llvm-cov from the installed nightly toolchain ──
+          SYSROOT="$(rustc --print sysroot)"
+          HOST_TRIPLE="$(rustc -vV | awk '/^host:/{print $2}')"
+          LLVM_COV="${SYSROOT}/lib/rustlib/${HOST_TRIPLE}/bin/llvm-cov"
+
+          # Use deterministic paths — cargo-fuzz always places artefacts here:
+          #   binary   → fuzz/target/<triple>/coverage/<target>
+          #   profdata → fuzz/coverage/<target>/coverage.profdata
+          PROFDATA="fuzz/coverage/${TARGET}/coverage.profdata"
+          BINARY="fuzz/target/${HOST_TRIPLE}/coverage/${TARGET}"
+
+          echo "llvm-cov : ${LLVM_COV}"
+          echo "profdata : ${PROFDATA}  (exists: $([ -f "$PROFDATA" ] && echo yes || echo no))"
+          echo "binary   : ${BINARY}  (exists: $([ -f "$BINARY" ] && echo yes || echo no))"
+
+          branches_covered="n/a"
+          branches_total="n/a"
+          branch_pct="n/a"
+
+          if [ -f "$PROFDATA" ] && [ -f "$BINARY" ]; then
+            JSON=$("$LLVM_COV" export "$BINARY" \
+              --instr-profile="$PROFDATA" \
+              --summary-only \
+              --ignore-filename-regex='\.cargo|rustc' 2>/dev/null || echo "{}")
+
+            echo "llvm-cov JSON (first 400 chars): $(echo "$JSON" | head -c 400)"
+
+            branches_covered=$(echo "$JSON" | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          try:
+              br = data['data'][0]['totals']['branches']
+              print(br['covered'])
+          except Exception:
+              print('n/a')
+          ")
+            branches_total=$(echo "$JSON" | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          try:
+              br = data['data'][0]['totals']['branches']
+              print(br['count'])
+          except Exception:
+              print('n/a')
+          ")
+            branch_pct=$(echo "$JSON" | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          try:
+              br = data['data'][0]['totals']['branches']
+              print(f\"{br['percent']:.2f}\")
+          except Exception:
+              print('n/a')
+          ")
+          else
+            echo "WARNING: profdata or binary not found — skipping llvm-cov."
+          fi
+
+          echo "Branch coverage: ${branches_covered}/${branches_total} (${branch_pct}%)"
+
+          # ── GitHub Step Summary ──
+          {
+            echo "## Edge Bitmap Coverage — \`${TARGET}\`"
+            echo ""
+            echo "### libFuzzer edge bitmap (inline 8-bit counters)"
+            echo ""
+            echo "| Metric | Value |"
+            echo "|---|---|"
+            echo "| Total edges | ${edge_total} |"
+            echo "| Covered edges | ${edge_covered} |"
+            echo "| Edge coverage | **${edge_pct}%** |"
+            echo ""
+            echo "### LLVM source-based branch coverage"
+            echo ""
+            echo "| Covered branches | Total branches | Coverage % |"
+            echo "|---|---|---|"
+            echo "| ${branches_covered} | ${branches_total} | **${branch_pct}%** |"
+            echo ""
+            echo "> Edge bitmap from libFuzzer merge; branch coverage from \`llvm-cov\` over \`${CORPUS}\`."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload crash artifacts
         if: failure()
@@ -110,13 +220,8 @@ jobs:
           - fuzz_sequencer_vs_replayer
     steps:
       - uses: actions/checkout@v4
-      - name: Checkout logos-execution-zone alongside lez-fuzzing
-        uses: actions/checkout@v4
-        with:
-          repository: logos-blockchain/logos-execution-zone
-          path: logos-execution-zone
-      - name: Symlink logos-execution-zone to sibling directory
-        run: ln -s "$GITHUB_WORKSPACE/logos-execution-zone" "$GITHUB_WORKSPACE/../logos-execution-zone"
+      - name: Checkout logos-execution-zone
+        uses: ./.github/actions/checkout-lez
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: llvm-tools-preview
@@ -127,8 +232,9 @@ jobs:
       - run: cargo install cargo-fuzz
       - name: Reproduce corpus
         run: |
+          mkdir -p corpus/libfuzz/${{ matrix.target }}
           cargo fuzz run ${{ matrix.target }} \
-            fuzz/corpus/${{ matrix.target }} -- -runs=0
+            corpus/libfuzz/${{ matrix.target }} -- -runs=0
 
   # ── proptest property tests ──────────────────────────────────────────────────
   proptest:
@@ -136,13 +242,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Checkout logos-execution-zone alongside lez-fuzzing
-        uses: actions/checkout@v4
-        with:
-          repository: logos-blockchain/logos-execution-zone
-          path: logos-execution-zone
-      - name: Symlink logos-execution-zone to sibling directory
-        run: ln -s "$GITHUB_WORKSPACE/logos-execution-zone" "$GITHUB_WORKSPACE/../logos-execution-zone"
+      - name: Checkout logos-execution-zone
+        uses: ./.github/actions/checkout-lez
       - uses: dtolnay/rust-toolchain@stable
       - name: Install logos-blockchain-circuits
         uses: ./logos-execution-zone/.github/actions/install-logos-blockchain-circuits
@@ -157,13 +258,8 @@ jobs:
     if: github.event_name == 'schedule'
     steps:
       - uses: actions/checkout@v4
-      - name: Checkout logos-execution-zone alongside lez-fuzzing
-        uses: actions/checkout@v4
-        with:
-          repository: logos-blockchain/logos-execution-zone
-          path: logos-execution-zone
-      - name: Symlink logos-execution-zone to sibling directory
-        run: ln -s "$GITHUB_WORKSPACE/logos-execution-zone" "$GITHUB_WORKSPACE/../logos-execution-zone"
+      - name: Checkout logos-execution-zone
+        uses: ./.github/actions/checkout-lez
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: llvm-tools-preview

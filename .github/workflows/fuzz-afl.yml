@@ -1,0 +1,387 @@
+name: AFL++ Fuzzing
+
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+env:
+  RISC0_DEV_MODE: "1"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ────────────────────────────────────────────────────────────────────────────
+  # afl-smoke — 60-second per targets
+  # ────────────────────────────────────────────────────────────────────────────
+  afl-smoke:
+    name: "AFL++ smoke — ${{ matrix.target }}"
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - fuzz_apply_state_diff_split_path
+          - fuzz_block_verification
+          - fuzz_encoding_roundtrip
+          - fuzz_multi_block_state_sequence
+          - fuzz_program_deployment_lifecycle
+          - fuzz_replay_prevention
+          - fuzz_sequencer_vs_replayer
+          - fuzz_signature_verification
+          - fuzz_state_diff_computation
+          - fuzz_state_serialization
+          - fuzz_state_transition
+          - fuzz_stateless_verification
+          - fuzz_transaction_decoding
+          - fuzz_validate_execute_consistency
+          - fuzz_witness_set_verification
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Checkout logos-execution-zone
+        uses: ./.github/actions/checkout-lez
+
+      - name: Install logos-blockchain-circuits
+        uses: ./logos-execution-zone/.github/actions/install-logos-blockchain-circuits
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install AFL++ v4.40c from source
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y \
+            build-essential python3-dev automake cmake \
+            flex bison libglib2.0-dev libpixman-1-dev \
+            python3-setuptools ninja-build
+          git clone --depth 1 --branch v4.40c \
+            https://github.com/AFLplusplus/AFLplusplus /tmp/aflplusplus
+          cd /tmp/aflplusplus
+          make distrib
+          sudo make install
+          afl-fuzz --version
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-afl
+        run: cargo install cargo-afl --locked
+
+      - name: Build fuzz target
+        run: |
+          cargo afl build \
+            --manifest-path fuzz/Cargo.toml \
+            --no-default-features \
+            --features fuzzer-afl \
+            --release \
+            --bin ${{ matrix.target }}
+
+      - name: Prepare seed corpus
+        run: |
+          TARGET="${{ matrix.target }}"
+          SEEDS="afl-seeds/${TARGET}"
+          mkdir -p "$SEEDS"
+          # Merge checked-in libFuzzer corpus and accumulated AFL corpus
+          for src in corpus/libfuzz/${TARGET} corpus/afl/${TARGET}; do
+            [ -d "$src" ] || continue
+            for f in "$src"/*; do
+              [ -f "$f" ] || continue
+              cp -n "$f" "$SEEDS/" 2>/dev/null || true
+            done
+          done
+          # Guarantee at least one seed so afl-fuzz does not abort
+          if [ -z "$(ls -A "$SEEDS")" ]; then
+            echo -n "seed" > "$SEEDS/default_seed"
+          fi
+          echo "Seed inputs: $(ls "$SEEDS" | wc -l)"
+
+      - name: Run AFL++ for 60 seconds
+        env:
+          AFL_SKIP_CPUFREQ: "1"
+          AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES: "1"
+        run: |
+          TARGET="${{ matrix.target }}"
+          mkdir -p afl-output/${TARGET}
+          # Disable errexit so that timeout's exit code 124 (expected signal) does not
+          # cause bash -e to abort the script before the guard below can run.
+          set +e
+          timeout 60 \
+            afl-fuzz \
+              -i afl-seeds/${TARGET} \
+              -o afl-output/${TARGET} \
+              -- fuzz/target/release/${TARGET}
+          rc=$?
+          set -e
+          # 124 = SIGALRM from timeout (expected); 0 = clean exit; anything else is a real failure
+          [ $rc -eq 0 ] || [ $rc -eq 124 ] || exit $rc
+
+      - name: Calculate and show edge bitmap coverage
+        if: always()
+        run: |
+          TARGET="${{ matrix.target }}"
+          MAP_SIZE=65536
+
+          # ── Method 1: bitmap_cvg from fuzzer_stats (written live by afl-fuzz) ──
+          STATS="afl-output/${TARGET}/default/fuzzer_stats"
+          if [ -f "$STATS" ]; then
+            cvg=$(grep '^bitmap_cvg' "$STATS" | awk '{print $3}')
+            filled_stat=$(grep '^edges_found' "$STATS" | awk '{print $3}' || echo "n/a")
+          else
+            cvg="n/a"
+            filled_stat="n/a"
+          fi
+
+          # ── Method 2: afl-showmap union over checked-in corpus ──
+          CORPUS="corpus/afl/${TARGET}"
+          BINARY="fuzz/target/release/${TARGET}"
+          showmap_filled="n/a"
+          showmap_pct="n/a"
+          if [ -d "$CORPUS" ] && [ -f "$BINARY" ]; then
+            afl-showmap -C \
+              -i "$CORPUS" \
+              -o "afl-edges-${TARGET}.txt" \
+              -- "$BINARY" 2>/dev/null || true
+            if [ -f "afl-edges-${TARGET}.txt" ]; then
+              showmap_filled=$(wc -l < "afl-edges-${TARGET}.txt" | tr -d ' ')
+              showmap_pct=$(echo "scale=2; ${showmap_filled} * 100 / ${MAP_SIZE}" | bc)
+            fi
+          fi
+
+          # ── ASCII bitmap visualisation (64×64 grid, one cell = 1024 slots) ──
+          # Each of the 4096 cells represents 16 consecutive bitmap slots.
+          # Cell is '■' if ANY of its 16 slots is non-zero, '·' otherwise.
+          EDGE_FILE="afl-edges-${TARGET}.txt"
+          CELLS=64          # 64 cells wide × 64 tall = 4096 cells × 16 slots = 65536
+          SLOTS_PER_CELL=16
+          if [ -f "$EDGE_FILE" ]; then
+            python3 - "$EDGE_FILE" "$CELLS" "$SLOTS_PER_CELL" <<'PYEOF'
+          import sys, math
+
+          edge_file   = sys.argv[1]
+          cells       = int(sys.argv[2])   # cells per row
+          spc         = int(sys.argv[3])   # slots per cell
+          MAP_SIZE    = 65536
+          total_cells = cells * cells      # 4096
+
+          hit = set()
+          with open(edge_file) as f:
+              for line in f:
+                  line = line.strip()
+                  if ':' in line:
+                      slot = int(line.split(':')[0])
+                      hit.add(slot)
+
+          print(f"\nEdge bitmap visualisation — {cells}×{cells} grid "
+                f"(each cell = {spc} slots, ■=any hit, ·=none)")
+          print("+" + "─" * (cells * 2 - 1) + "+")
+          for row in range(cells):
+              row_str = ""
+              for col in range(cells):
+                  cell_idx   = row * cells + col
+                  slot_start = cell_idx * spc
+                  slot_end   = slot_start + spc
+                  filled = any(s in hit for s in range(slot_start, slot_end))
+                  row_str += ("■" if filled else "·") + " "
+              print("|" + row_str.rstrip() + "|")
+          print("+" + "─" * (cells * 2 - 1) + "+")
+
+          filled_cells = sum(
+              1 for c in range(total_cells)
+              if any((c * spc + s) in hit for s in range(spc))
+          )
+          print(f"Cells filled: {filled_cells}/{total_cells} "
+                f"({filled_cells*100/total_cells:.1f}%)\n")
+          PYEOF
+          fi
+
+          # ── GitHub Step Summary ──
+          {
+            echo "## Edge Bitmap Coverage — \`${TARGET}\`"
+            echo ""
+            echo "| Method | Filled slots | Bitmap filled % |"
+            echo "|---|---|---|"
+            echo "| \`fuzzer_stats\` (afl-fuzz live) | ${filled_stat} | **${cvg}** |"
+            echo "| \`afl-showmap\` (corpus union)   | ${showmap_filled} | **${showmap_pct}%** |"
+            echo ""
+            echo "> MAP_SIZE = ${MAP_SIZE} slots (2¹⁶). "
+            echo "> A slot is filled when any corpus input exercises that program edge."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Package AFL findings into tarball
+        if: always()
+        run: |
+          TARGET="${{ matrix.target }}"
+          OUTPUT="afl-output/${TARGET}"
+          # AFL++ queue/crash/hang filenames contain colons, which are forbidden by
+          # actions/upload-artifact on NTFS-based runners.  Bundle everything into a
+          # single tarball so the colon-bearing filenames never appear as individual
+          # artifact entries.
+          if [ -d "$OUTPUT" ]; then
+            tar -czf "afl-findings-${TARGET}.tar.gz" \
+              -C "$(dirname "$OUTPUT")" "$(basename "$OUTPUT")"
+          else
+            tar -czf "afl-findings-${TARGET}.tar.gz" -T /dev/null
+          fi
+
+      - name: Upload AFL findings artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: afl-findings-${{ matrix.target }}
+          path: afl-findings-${{ matrix.target }}.tar.gz
+          if-no-files-found: ignore
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # afl-coverage — LLVM coverage report for all 15 targets
+  # ────────────────────────────────────────────────────────────────────────────
+  afl-coverage:
+    name: "AFL++ coverage — ${{ matrix.target }}"
+    runs-on: ubuntu-latest
+    needs: afl-smoke
+
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - fuzz_apply_state_diff_split_path
+          - fuzz_block_verification
+          - fuzz_encoding_roundtrip
+          - fuzz_multi_block_state_sequence
+          - fuzz_program_deployment_lifecycle
+          - fuzz_replay_prevention
+          - fuzz_sequencer_vs_replayer
+          - fuzz_signature_verification
+          - fuzz_state_diff_computation
+          - fuzz_state_serialization
+          - fuzz_state_transition
+          - fuzz_stateless_verification
+          - fuzz_transaction_decoding
+          - fuzz_validate_execute_consistency
+          - fuzz_witness_set_verification
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Checkout logos-execution-zone
+        uses: ./.github/actions/checkout-lez
+
+      - name: Install logos-blockchain-circuits
+        uses: ./logos-execution-zone/.github/actions/install-logos-blockchain-circuits
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Rust nightly + llvm-tools-preview
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: llvm-tools-preview
+
+      - name: Download smoke findings for ${{ matrix.target }}
+        uses: actions/download-artifact@v4
+        with:
+          name: afl-findings-${{ matrix.target }}
+          path: .
+        continue-on-error: true   # no crashes/hangs/queue is fine
+
+      - name: Extract AFL findings tarball
+        run: |
+          TARGET="${{ matrix.target }}"
+          TARBALL="afl-findings-${TARGET}.tar.gz"
+          if [ -f "$TARBALL" ]; then
+            tar -xzf "$TARBALL"
+          fi
+
+      - name: Build with LLVM instrumented coverage
+        env:
+          RUSTFLAGS: "-C instrument-coverage"
+          RISC0_DEV_MODE: "1"
+        run: |
+          # Build with the libfuzzer harness: libFuzzer accepts corpus files as
+          # positional arguments, runs each through the fuzz closure once, then
+          # exits — LLVM coverage counters (-C instrument-coverage) are flushed
+          # to the .profraw file on exit regardless of the fuzzer runtime used.
+          cargo build \
+            --manifest-path fuzz/Cargo.toml \
+            --no-default-features \
+            --features fuzzer-libfuzzer \
+            --release \
+            --bin ${{ matrix.target }}
+
+      - name: Run corpus + queue entries through instrumented binary
+        run: |
+          TARGET="${{ matrix.target }}"
+          BINARY="fuzz/target/release/${TARGET}"
+          PROFRAW_DIR="coverage/afl/${TARGET}/profraw"
+          mkdir -p "$PROFRAW_DIR"
+          idx=0
+
+          # AFL corpus (checked-in, accumulated from prior runs)
+          for f in corpus/afl/${TARGET}/*; do
+            [ -f "$f" ] || continue
+            LLVM_PROFILE_FILE="${PROFRAW_DIR}/${idx}.profraw" "$BINARY" "$f" 2>/dev/null || true
+            idx=$((idx + 1))
+          done
+
+          # AFL++ queue entries from today's smoke run (downloaded artifact)
+          for instance_dir in afl-output/${TARGET}/*/; do
+            QUEUE="${instance_dir}queue"
+            [ -d "$QUEUE" ] || continue
+            for f in "$QUEUE"/id:*; do
+              [ -f "$f" ] || continue
+              LLVM_PROFILE_FILE="${PROFRAW_DIR}/${idx}.profraw" "$BINARY" "$f" 2>/dev/null || true
+              idx=$((idx + 1))
+            done
+          done
+          echo "Ran ${idx} inputs through ${TARGET}"
+
+      - name: Merge raw profiles
+        run: |
+          TARGET="${{ matrix.target }}"
+          PROFRAW_DIR="coverage/afl/${TARGET}/profraw"
+          PROFDATA="coverage/afl/${TARGET}/merged.profdata"
+          SYSROOT="$(rustc --print sysroot)"
+          HOST_TRIPLE="$(rustc -vV | awk '/^host:/{print $2}')"
+          LLVM_PROFDATA="${SYSROOT}/lib/rustlib/${HOST_TRIPLE}/bin/llvm-profdata"
+          shopt -s nullglob
+          files=("${PROFRAW_DIR}"/*.profraw)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No .profraw files found — skipping merge."
+            exit 0
+          fi
+          "$LLVM_PROFDATA" merge -sparse "${files[@]}" -o "$PROFDATA"
+
+      - name: Generate HTML coverage report
+        run: |
+          TARGET="${{ matrix.target }}"
+          BINARY="fuzz/target/release/${TARGET}"
+          PROFDATA="coverage/afl/${TARGET}/merged.profdata"
+          HTML_DIR="coverage/afl/${TARGET}/html"
+          SYSROOT="$(rustc --print sysroot)"
+          HOST_TRIPLE="$(rustc -vV | awk '/^host:/{print $2}')"
+          LLVM_COV="${SYSROOT}/lib/rustlib/${HOST_TRIPLE}/bin/llvm-cov"
+          if [ ! -f "$PROFDATA" ]; then
+            echo "No profdata — skipping HTML report."
+            exit 0
+          fi
+          mkdir -p "$HTML_DIR"
+          "$LLVM_COV" show \
+            "$BINARY" \
+            --instr-profile="$PROFDATA" \
+            --format=html \
+            --output-dir="$HTML_DIR" \
+            --ignore-filename-regex='\.cargo|rustc'
+          echo "Coverage report: ${HTML_DIR}/index.html"
+
+      - name: Upload coverage report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: afl-coverage-${{ matrix.target }}
+          path: coverage/afl/${{ matrix.target }}/html/
+          if-no-files-found: ignore
