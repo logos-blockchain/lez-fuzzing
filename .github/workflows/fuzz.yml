@@ -84,30 +84,58 @@ jobs:
           mkdir -p "$CORPUS"
 
           # ── Build and replay the corpus with LLVM coverage instrumentation ──
+          # Capture output so we can parse the libFuzzer edge-bitmap lines.
           # cargo fuzz coverage builds into fuzz/target/<triple>/coverage/<target>
           # and writes the merged profdata to fuzz/coverage/<target>/coverage.profdata
-          cargo fuzz coverage "$TARGET" "$CORPUS" || true
+          COVERAGE_LOG=$(cargo fuzz coverage "$TARGET" "$CORPUS" 2>&1 || true)
+          echo "$COVERAGE_LOG"
+
+          # ── Extract libFuzzer edge-bitmap metrics from the merge log ──
+          #   Total edges:   "INFO: Loaded 1 modules   (N inline 8-bit counters)"
+          #   Covered edges: "MERGE-OUTER: ... N new coverage edges"
+          edge_total=$(echo "$COVERAGE_LOG" \
+            | grep -oP '(?<=Loaded 1 modules\s{1,10}\()\d+(?= inline 8-bit counters)' \
+            | tail -1)
+          edge_covered=$(echo "$COVERAGE_LOG" \
+            | grep -oP '\d+(?= new coverage edges)' \
+            | tail -1)
+
+          if [ -n "$edge_total" ] && [ -n "$edge_covered" ] && [ "$edge_total" -gt 0 ]; then
+            edge_pct=$(python3 -c "print(f'{100*${edge_covered}/${edge_total}:.2f}')")
+          else
+            edge_pct="n/a"
+          fi
+          [ -z "$edge_total"   ] && edge_total="n/a"
+          [ -z "$edge_covered" ] && edge_covered="n/a"
+
+          echo "Edge bitmap: ${edge_covered}/${edge_total} (${edge_pct}%)"
 
           # ── Locate llvm-cov from the installed nightly toolchain ──
           SYSROOT="$(rustc --print sysroot)"
           HOST_TRIPLE="$(rustc -vV | awk '/^host:/{print $2}')"
           LLVM_COV="${SYSROOT}/lib/rustlib/${HOST_TRIPLE}/bin/llvm-cov"
 
-          # The coverage-instrumented binary lives under a "coverage" profile directory,
-          # NOT "release" — search specifically for that path.
-          PROFDATA=$(find fuzz/coverage/"$TARGET" -name "coverage.profdata" 2>/dev/null | head -1)
-          BINARY=$(find fuzz/target -path "*coverage/${TARGET}" -type f 2>/dev/null | head -1)
+          # Use deterministic paths — cargo-fuzz always places artefacts here:
+          #   binary   → fuzz/target/<triple>/coverage/<target>
+          #   profdata → fuzz/coverage/<target>/coverage.profdata
+          PROFDATA="fuzz/coverage/${TARGET}/coverage.profdata"
+          BINARY="fuzz/target/${HOST_TRIPLE}/coverage/${TARGET}"
+
+          echo "llvm-cov : ${LLVM_COV}"
+          echo "profdata : ${PROFDATA}  (exists: $([ -f "$PROFDATA" ] && echo yes || echo no))"
+          echo "binary   : ${BINARY}  (exists: $([ -f "$BINARY" ] && echo yes || echo no))"
 
           branches_covered="n/a"
           branches_total="n/a"
-          pct="n/a"
+          branch_pct="n/a"
 
-          if [ -n "$PROFDATA" ] && [ -f "$PROFDATA" ] && \
-             [ -n "$BINARY" ]   && [ -f "$BINARY" ]; then
+          if [ -f "$PROFDATA" ] && [ -f "$BINARY" ]; then
             JSON=$("$LLVM_COV" export "$BINARY" \
               --instr-profile="$PROFDATA" \
               --summary-only \
               --ignore-filename-regex='\.cargo|rustc' 2>/dev/null || echo "{}")
+
+            echo "llvm-cov JSON (first 400 chars): $(echo "$JSON" | head -c 400)"
 
             branches_covered=$(echo "$JSON" | python3 -c "
           import sys, json
@@ -127,7 +155,7 @@ jobs:
           except Exception:
               print('n/a')
           ")
-            pct=$(echo "$JSON" | python3 -c "
+            branch_pct=$(echo "$JSON" | python3 -c "
           import sys, json
           data = json.load(sys.stdin)
           try:
@@ -136,19 +164,31 @@ jobs:
           except Exception:
               print('n/a')
           ")
+          else
+            echo "WARNING: profdata or binary not found — skipping llvm-cov."
           fi
 
-          echo "Branch coverage: ${branches_covered}/${branches_total} (${pct}%)"
+          echo "Branch coverage: ${branches_covered}/${branches_total} (${branch_pct}%)"
 
           # ── GitHub Step Summary ──
           {
             echo "## Edge Bitmap Coverage — \`${TARGET}\`"
             echo ""
-            echo "| Method | Covered branches | Total branches | Coverage % |"
-            echo "|---|---|---|---|"
-            echo "| \`llvm-cov\` (libFuzzer corpus) | ${branches_covered} | ${branches_total} | **${pct}%** |"
+            echo "### libFuzzer edge bitmap (inline 8-bit counters)"
             echo ""
-            echo "> Coverage computed over \`${CORPUS}\` using LLVM source-based branch instrumentation."
+            echo "| Metric | Value |"
+            echo "|---|---|"
+            echo "| Total edges | ${edge_total} |"
+            echo "| Covered edges | ${edge_covered} |"
+            echo "| Edge coverage | **${edge_pct}%** |"
+            echo ""
+            echo "### LLVM source-based branch coverage"
+            echo ""
+            echo "| Covered branches | Total branches | Coverage % |"
+            echo "|---|---|---|"
+            echo "| ${branches_covered} | ${branches_total} | **${branch_pct}%** |"
+            echo ""
+            echo "> Edge bitmap from libFuzzer merge; branch coverage from \`llvm-cov\` over \`${CORPUS}\`."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload crash artifacts
