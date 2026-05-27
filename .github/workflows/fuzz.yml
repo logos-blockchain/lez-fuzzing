@@ -38,14 +38,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Checkout logos-execution-zone alongside lez-fuzzing
-        uses: actions/checkout@v4
-        with:
-          repository: logos-blockchain/logos-execution-zone
-          path: logos-execution-zone
-
-      - name: Symlink logos-execution-zone to sibling directory
-        run: ln -s "$GITHUB_WORKSPACE/logos-execution-zone" "$GITHUB_WORKSPACE/../logos-execution-zone"
+      - name: Checkout logos-execution-zone
+        uses: ./.github/actions/checkout-lez
 
       - name: Install Rust nightly (required by cargo-fuzz)
         uses: dtolnay/rust-toolchain@nightly
@@ -226,13 +220,8 @@ jobs:
           - fuzz_sequencer_vs_replayer
     steps:
       - uses: actions/checkout@v4
-      - name: Checkout logos-execution-zone alongside lez-fuzzing
-        uses: actions/checkout@v4
-        with:
-          repository: logos-blockchain/logos-execution-zone
-          path: logos-execution-zone
-      - name: Symlink logos-execution-zone to sibling directory
-        run: ln -s "$GITHUB_WORKSPACE/logos-execution-zone" "$GITHUB_WORKSPACE/../logos-execution-zone"
+      - name: Checkout logos-execution-zone
+        uses: ./.github/actions/checkout-lez
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: llvm-tools-preview
@@ -253,13 +242,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Checkout logos-execution-zone alongside lez-fuzzing
-        uses: actions/checkout@v4
-        with:
-          repository: logos-blockchain/logos-execution-zone
-          path: logos-execution-zone
-      - name: Symlink logos-execution-zone to sibling directory
-        run: ln -s "$GITHUB_WORKSPACE/logos-execution-zone" "$GITHUB_WORKSPACE/../logos-execution-zone"
+      - name: Checkout logos-execution-zone
+        uses: ./.github/actions/checkout-lez
       - uses: dtolnay/rust-toolchain@stable
       - name: Install logos-blockchain-circuits
         uses: ./logos-execution-zone/.github/actions/install-logos-blockchain-circuits
@@ -274,13 +258,8 @@ jobs:
     if: github.event_name == 'schedule'
     steps:
       - uses: actions/checkout@v4
-      - name: Checkout logos-execution-zone alongside lez-fuzzing
-        uses: actions/checkout@v4
-        with:
-          repository: logos-blockchain/logos-execution-zone
-          path: logos-execution-zone
-      - name: Symlink logos-execution-zone to sibling directory
-        run: ln -s "$GITHUB_WORKSPACE/logos-execution-zone" "$GITHUB_WORKSPACE/../logos-execution-zone"
+      - name: Checkout logos-execution-zone
+        uses: ./.github/actions/checkout-lez
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: llvm-tools-preview

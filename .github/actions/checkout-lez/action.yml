@@ -1,0 +1,18 @@
+name: Checkout logos-execution-zone
+description: >
+  Checks out logos-blockchain/logos-execution-zone into a sub-directory and
+  symlinks it to the expected sibling path (../logos-execution-zone) so that
+  Cargo path dependencies resolve correctly.
+
+runs:
+  using: composite
+  steps:
+    - name: Checkout logos-execution-zone alongside lez-fuzzing
+      uses: actions/checkout@v4
+      with:
+        repository: logos-blockchain/logos-execution-zone
+        path: logos-execution-zone
+
+    - name: Symlink logos-execution-zone to sibling directory
+      run: ln -s "$GITHUB_WORKSPACE/logos-execution-zone" "$GITHUB_WORKSPACE/../logos-execution-zone"
+      shell: bash
