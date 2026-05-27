@@ -31,6 +31,9 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.head_ref }}
 
+      - name: Checkout logos-execution-zone
+        uses: ./.github/actions/checkout-lez
+
       - name: Install nightly toolchain for rustfmt
         run: rustup install nightly --profile minimal --component rustfmt
 
@@ -47,14 +50,8 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.head_ref }}
 
-      - name: Checkout logos-execution-zone alongside lez-fuzzing
-        uses: actions/checkout@v4
-        with:
-          repository: logos-blockchain/logos-execution-zone
-          path: logos-execution-zone
-
-      - name: Symlink logos-execution-zone to sibling directory
-        run: ln -s "$GITHUB_WORKSPACE/logos-execution-zone" "$GITHUB_WORKSPACE/../logos-execution-zone"
+      - name: Checkout logos-execution-zone
+        uses: ./.github/actions/checkout-lez
 
       - name: Install logos-blockchain-circuits
         uses: ./logos-execution-zone/.github/actions/install-logos-blockchain-circuits

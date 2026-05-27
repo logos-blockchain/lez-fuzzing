@@ -46,14 +46,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Checkout logos-execution-zone alongside lez-fuzzing
-        uses: actions/checkout@v4
-        with:
-          repository: logos-blockchain/logos-execution-zone
-          path: logos-execution-zone
-
-      - name: Symlink logos-execution-zone to sibling directory
-        run: ln -s "$GITHUB_WORKSPACE/logos-execution-zone" "$GITHUB_WORKSPACE/../logos-execution-zone"
+      - name: Checkout logos-execution-zone
+        uses: ./.github/actions/checkout-lez
 
       - name: Install logos-blockchain-circuits
         uses: ./logos-execution-zone/.github/actions/install-logos-blockchain-circuits
@@ -276,14 +270,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Checkout logos-execution-zone alongside lez-fuzzing
-        uses: actions/checkout@v4
-        with:
-          repository: logos-blockchain/logos-execution-zone
-          path: logos-execution-zone
-
-      - name: Symlink logos-execution-zone to sibling directory
-        run: ln -s "$GITHUB_WORKSPACE/logos-execution-zone" "$GITHUB_WORKSPACE/../logos-execution-zone"
+      - name: Checkout logos-execution-zone
+        uses: ./.github/actions/checkout-lez
 
       - name: Install logos-blockchain-circuits
         uses: ./logos-execution-zone/.github/actions/install-logos-blockchain-circuits
