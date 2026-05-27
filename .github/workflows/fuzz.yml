@@ -1,9 +1,6 @@
 name: Fuzzing
 
 on:
-  push:
-    branches: [main, develop, feat-add-afl-fuzzing]
-  pull_request:
   schedule:
     - cron: "0 2 * * *"
   workflow_dispatch:

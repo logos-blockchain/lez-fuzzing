@@ -337,3 +337,187 @@ pub fn assert_invariants(ctx: &InvariantCtx<'_>) {
         }
     }
 }
+
+// ── Unit tests ────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nssa::V03State;
+
+    fn make_empty_state() -> V03State {
+        V03State::new_with_genesis_accounts(&[], vec![], 0)
+    }
+
+    fn make_empty_snapshot() -> BalanceSnapshot {
+        BalanceSnapshot(std::collections::HashMap::new())
+    }
+
+    fn make_empty_nonce_snapshot() -> NonceSnapshot {
+        NonceSnapshot(std::collections::HashMap::new())
+    }
+
+    #[test]
+    fn invariant_state_isolation_on_failure_does_not_panic_on_error() {
+        let state = make_empty_state();
+        let ctx = InvariantCtx {
+            state_before: &state,
+            state_after: &state,
+            execution_succeeded: false,
+            balances_before: make_empty_snapshot(),
+            nonces_before: make_empty_nonce_snapshot(),
+        };
+        assert_invariants(&ctx);
+    }
+
+    #[test]
+    fn invariant_replay_rejection_does_not_panic() {
+        let state = make_empty_state();
+        let ctx = InvariantCtx {
+            state_before: &state,
+            state_after: &state,
+            execution_succeeded: true,
+            balances_before: make_empty_snapshot(),
+            nonces_before: make_empty_nonce_snapshot(),
+        };
+        assert_invariants(&ctx);
+    }
+
+    #[test]
+    fn balance_conservation_catches_inflation_on_success() {
+        // Arrange: one account with balance 100.
+        let acc_id = nssa::AccountId::new([1_u8; 32]);
+        let state_before = V03State::new_with_genesis_accounts(&[(acc_id, 100)], vec![], 0);
+        // Simulate execution that inflated the balance to 200.
+        let state_after = V03State::new_with_genesis_accounts(&[(acc_id, 200)], vec![], 0);
+
+        let mut balances = std::collections::HashMap::new();
+        balances.insert(acc_id, 100_u128);
+
+        let ctx = InvariantCtx {
+            state_before: &state_before,
+            state_after: &state_after,
+            execution_succeeded: true,
+            balances_before: BalanceSnapshot(balances),
+            nonces_before: make_empty_nonce_snapshot(),
+        };
+
+        let result = std::panic::catch_unwind(|| assert_invariants(&ctx));
+        assert!(result.is_err(), "expected panic for balance inflation");
+    }
+
+    #[test]
+    fn nonce_increment_correctness_passes_with_no_signers() {
+        // Empty signer list — no accounts to check; trivially satisfies the invariant.
+        let state = make_empty_state();
+        assert_nonce_increment_correctness(&[], &make_empty_nonce_snapshot(), &state);
+    }
+
+    #[test]
+    fn nonce_increment_correctness_passes_when_signer_not_in_snapshot() {
+        // Signer ID is present in the list but absent from the snapshot — skipped.
+        let acc_id = nssa::AccountId::new([9_u8; 32]);
+        let state = make_empty_state();
+        // Empty snapshot → `continue` branch fires; no assertion is made.
+        assert_nonce_increment_correctness(&[acc_id], &make_empty_nonce_snapshot(), &state);
+    }
+
+    #[test]
+    fn nonce_increment_correctness_catches_unchanged_nonce() {
+        // Arrange: signer has nonce 5 in the snapshot; the state returns Nonce(0) for the
+        // same account (genesis default).  expected = Nonce(6), actual = Nonce(0) → VIOLATION.
+        let acc_id = nssa::AccountId::new([3_u8; 32]);
+        let state = V03State::new_with_genesis_accounts(&[], vec![], 0);
+
+        let mut nonces = std::collections::HashMap::new();
+        nonces.insert(acc_id, Nonce(5));
+
+        let result = std::panic::catch_unwind(|| {
+            assert_nonce_increment_correctness(&[acc_id], &NonceSnapshot(nonces), &state);
+        });
+        assert!(result.is_err(), "expected panic for unchanged nonce");
+    }
+
+    #[test]
+    fn failed_tx_nonce_stability_catches_nonce_mutation() {
+        let acc_id = nssa::AccountId::new([2_u8; 32]);
+        // before: nonce 5; after: nonce 6 (should not happen on failure)
+        let state_before = V03State::new_with_genesis_accounts(&[(acc_id, 100)], vec![], 0);
+        let state_after = V03State::new_with_genesis_accounts(&[(acc_id, 100)], vec![], 0);
+
+        // We check the nonce snapshot directly; the states both return default nonce (0).
+        // Fake a discrepancy by inserting nonce=1 in the snapshot while state_after has nonce=0.
+        let mut nonces = std::collections::HashMap::new();
+        // Nonce(1) in snapshot, but state_after will return Nonce(0).
+        nonces.insert(acc_id, Nonce(1));
+
+        let mut balances = std::collections::HashMap::new();
+        balances.insert(acc_id, 100_u128);
+
+        let ctx = InvariantCtx {
+            state_before: &state_before,
+            state_after: &state_after,
+            execution_succeeded: false,
+            balances_before: BalanceSnapshot(balances),
+            nonces_before: NonceSnapshot(nonces),
+        };
+
+        let result = std::panic::catch_unwind(|| assert_invariants(&ctx));
+        assert!(
+            result.is_err(),
+            "expected panic for nonce mutation on failure"
+        );
+    }
+}
+
+// ── ReplayRejection proptest suite ───────────────────────────────────────────
+//
+// This suite constitutes the formal, reproducible exercise of the ReplayRejection
+// invariant.  It generates a realistic initial state and a correctly-signed
+// native-transfer transaction, applies it once, and asserts that a second
+// application is rejected.
+//
+// Run with: cargo test -p fuzz_props replay_rejection
+#[cfg(test)]
+mod replay_proptest {
+    use crate::generators::{arb_native_transfer_tx, test_accounts};
+    use nssa::V03State;
+    use proptest::prelude::*;
+
+    /// Build a `V03State` from the testnet accounts, assigning each a fixed
+    /// balance large enough for any reasonable transfer amount.
+    fn make_test_state() -> V03State {
+        let accounts = test_accounts();
+        let init_accs: Vec<(nssa::AccountId, u128)> = accounts
+            .iter()
+            .map(|(id, _)| (*id, 1_000_000_u128))
+            .collect();
+        V03State::new_with_genesis_accounts(&init_accs, vec![], 0)
+    }
+
+    proptest! {
+        /// **ReplayRejection** \u{2014} a transaction accepted in block N must be
+        /// rejected when replayed in block N+1, because the nonce is consumed
+        /// on first acceptance.
+        #[test]
+        fn replay_rejection_proptest(tx in arb_native_transfer_tx(test_accounts())) {
+            let mut state = make_test_state();
+
+            // Stateless gate \u{2014} skip structurally invalid transactions (e.g. those
+            // whose public key does not match the declared sender).
+            let Ok(validated_tx) = tx.transaction_stateless_check() else { return Ok(()) };
+
+            // First application \u{2014} may fail for state-level reasons (e.g. sender
+            // has insufficient balance, wrong nonce).  In that case there is
+            // nothing to replay.
+            let first_result = validated_tx.execute_check_on_state(&mut state, 1, 0);
+
+            if let Ok(applied_tx) = first_result {
+                // Use the shared framework function.  assert_replay_rejection uses
+                // assert!() rather than prop_assert!(); for structured proptest
+                // inputs the framework-level panic is equivalent.
+                super::assert_replay_rejection(applied_tx, &mut state, 2, 1);
+            }
+        }
+    }
+}
