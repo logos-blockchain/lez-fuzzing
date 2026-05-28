@@ -478,37 +478,50 @@ automates steps 2–5 and uploads the report as a workflow artifact.
 
 ## Invariant Framework
 
-Shared invariants live in `fuzz_props/src/invariants.rs`. Each invariant implements
-`ProtocolInvariant` and is automatically run by `assert_invariants()`.
+Shared invariants live in `fuzz_props/src/invariants.rs`. There are two layers:
 
-Concrete invariants currently registered in `assert_invariants()`:
+### Primary API — `assert_tx_execution_invariants()`
 
-| Invariant | Description | Implementation status |
-|-----------|-------------|----------------------|
-| `StateIsolationOnFailure` | Per-account balance must not change for any tracked account when a transaction is rejected | ✅ Fully implemented |
-| `BalanceConservation` | Total balance of all known accounts must be conserved when a transaction succeeds | ✅ Fully implemented |
-| `FailedTxNonceStability` | Every account's nonce must remain unchanged when a transaction is rejected | ✅ Fully implemented |
-| `ReplayRejection` | An accepted transaction must be rejected when replayed | ⚠️ Registry stub — always returns `None` from `InvariantCtx`; use `assert_replay_rejection()` directly (see note below) |
-| `NonceIncrementCorrectness` | Every signer account's nonce must be incremented by exactly one after a successful transaction | ⚠️ Registry stub — always returns `None` from `InvariantCtx`; use `assert_nonce_increment_correctness()` directly (see note below) |
+For every fuzz target that calls `execute_check_on_state`, use the single unified entry
+point.  It enforces the five state-transition invariants in one call, routing by outcome:
 
-> **Note on stub invariants:** `ReplayRejection` and `NonceIncrementCorrectness` cannot be
-> fully exercised through `InvariantCtx` alone.  Each requires information that is consumed
-> before `InvariantCtx` is built:
->
-> - **`ReplayRejection`**: `execute_check_on_state` returns the `NSSATransaction` on `Ok`,
->   consuming `self`.  Replaying it requires re-applying the returned transaction to the
->   post-execution state — not possible via a shared `&InvariantCtx`.  Use the standalone
->   `assert_replay_rejection(applied_tx, state, next_block_id, next_timestamp)` helper
->   immediately after each successful execution.  The proptest suite `replay_rejection_proptest`
->   in `fuzz_props/src/invariants.rs` provides reproducible structured coverage of this
->   invariant.
->
-> - **`NonceIncrementCorrectness`**: `apply_state_diff` consumes the `ValidatedStateDiff`
->   whose signer-account list is private to the `nssa` crate.  The caller must derive signer
->   IDs from the transaction's witness set before consuming the diff, then call the standalone
->   `assert_nonce_increment_correctness(signer_ids, nonces_before, state_after)` helper.
->   The `signer_account_ids()` helper in `fuzz_props::generators` extracts signer `AccountId`s
->   from an `NSSATransaction`'s witness set.
+| Invariant | Active when |
+|-----------|-------------|
+| `StateIsolationOnFailure` | `execution_result` is `Err` |
+| `FailedTxNonceStability` | `execution_result` is `Err` |
+| `BalanceConservation` | `execution_result` is `Ok` |
+| `NonceIncrementCorrectness` | `execution_result` is `Ok` |
+| `ReplayRejection` | `execution_result` is `Ok` |
+
+```rust
+let state_snapshot = state.clone();
+let result = tx.execute_check_on_state(&mut state, block_id, timestamp);
+
+assert_tx_execution_invariants(
+    &state_snapshot,
+    &mut state,
+    balances_before,
+    nonces_before,
+    result,
+    (block_id + 1, timestamp + 1),
+);
+```
+
+One call.  No standalone helpers to remember.
+
+### Registry API — `assert_invariants()` + `ProtocolInvariant`
+
+Each invariant is a zero-size struct implementing `ProtocolInvariant`; `assert_invariants()`
+runs the registry and panics on the first violation.  This lower-level API is used
+internally by `assert_tx_execution_invariants` and is also available for targets where no
+transaction is available for replay (e.g. pure state-serialization targets).
+
+```rust
+// Only use assert_invariants() directly for non-execution contexts.
+// For execute_check_on_state call sites, prefer assert_tx_execution_invariants().
+assert_invariants(&InvariantCtx { state_before, state_after, execution_succeeded,
+                                  balances_before, nonces_before });
+```
 
 Additional invariants enforced **inline** in specific targets (not via `ProtocolInvariant`):
 

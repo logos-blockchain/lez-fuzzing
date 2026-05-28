@@ -31,7 +31,7 @@ fn invariant_state_isolation_on_failure_does_not_panic_on_error() {
 }
 
 #[test]
-fn invariant_replay_rejection_does_not_panic() {
+fn assert_invariants_does_not_panic_on_success_with_empty_state() {
     let state = make_empty_state();
     let ctx = InvariantCtx {
         state_before: &state,

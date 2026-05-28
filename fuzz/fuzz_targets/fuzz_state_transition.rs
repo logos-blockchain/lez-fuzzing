@@ -1,13 +1,8 @@
 #![cfg_attr(feature = "fuzzer-libfuzzer", no_main)]
 
 use arbitrary::{Arbitrary, Unstructured};
-use fuzz_props::generators::{
-    arb_fuzz_native_transfer, arbitrary_fuzz_state, arbitrary_transaction, signer_account_ids,
-};
-use fuzz_props::invariants::{
-    BalanceSnapshot, InvariantCtx, NonceSnapshot, assert_invariants,
-    assert_nonce_increment_correctness, assert_replay_rejection,
-};
+use fuzz_props::generators::{arb_fuzz_native_transfer, arbitrary_fuzz_state, arbitrary_transaction};
+use fuzz_props::invariants::{BalanceSnapshot, NonceSnapshot, assert_tx_execution_invariants};
 use nssa::V03State;
 
 fuzz_props::fuzz_entry!(|data: &[u8]| {
@@ -75,29 +70,18 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
         // Snapshot state before execution for isolation checks.
         let state_snapshot = state.clone();
         let result = tx.execute_check_on_state(&mut state, block_id, timestamp);
-        let execution_succeeded = result.is_ok();
 
-        // ── Shared invariant checks ───────────────────────────────────────────
-        // Asserts:
-        //   • StateIsolationOnFailure  — balances unchanged on rejection
-        //   • BalanceConservation      — total balance conserved on success
-        //   • FailedTxNonceStability   — nonces unchanged on rejection
-        assert_invariants(&InvariantCtx {
-            state_before: &state_snapshot,
-            state_after: &state,
-            execution_succeeded,
+        // ── All five protocol invariants ──────────────────────────────────────
+        // A single call enforces every invariant — no standalone helpers needed:
+        //   On rejection: StateIsolationOnFailure + FailedTxNonceStability
+        //   On success:   BalanceConservation + NonceIncrementCorrectness + ReplayRejection
+        assert_tx_execution_invariants(
+            &state_snapshot,
+            &mut state,
             balances_before,
-            nonces_before: nonces_before.clone(),
-        });
-
-        // ── NonceIncrementCorrectness + ReplayRejection ───────────────────────
-        // execute_check_on_state returns the NSSATransaction on Ok.
-        // First verify every signer's nonce was incremented by exactly one, then
-        // replay in the next block to confirm the nonce is permanently consumed.
-        if let Ok(applied_tx) = result {
-            let signer_ids = signer_account_ids(&applied_tx);
-            assert_nonce_increment_correctness(&signer_ids, &nonces_before, &state);
-            assert_replay_rejection(applied_tx, &mut state, block_id + 1, timestamp + 1);
-        }
+            nonces_before,
+            result,
+            (block_id + 1, timestamp + 1),
+        );
     }
 });

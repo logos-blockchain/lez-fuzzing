@@ -155,55 +155,46 @@ impl ProtocolInvariant for FailedTxNonceStability {
 
 /// A successfully accepted transaction must be rejected when replayed.
 ///
-/// # Note
+/// # Enforcement
 ///
-/// This invariant **cannot** be exercised through [`InvariantCtx`] alone because
-/// the replay check requires re-applying the `NSSATransaction` that was consumed
-/// by `execute_check_on_state`.  The `ProtocolInvariant` impl here is a registry
-/// placeholder only; it always returns `None`.
+/// This invariant **cannot** be enforced through [`InvariantCtx`] because the replay
+/// check requires re-applying the `NSSATransaction` that `execute_check_on_state`
+/// consumes and returns on `Ok`.  It is therefore **not registered** in
+/// [`assert_invariants`]; calling `assert_invariants` alone does **not** cover
+/// `ReplayRejection`.
 ///
-/// Use the standalone [`assert_replay_rejection`] function instead, which accepts
-/// the `NSSATransaction` returned on success and performs the replay inline.
+/// Every fuzz target that performs state transitions **must** call the standalone
+/// [`assert_replay_rejection`] function after each successful execution:
+///
+/// ```rust,ignore
+/// if let Ok(applied_tx) = result {
+///     assert_replay_rejection(applied_tx, &mut state, block_id + 1, timestamp + 1);
+/// }
+/// ```
 pub struct ReplayRejection;
-
-impl ProtocolInvariant for ReplayRejection {
-    fn name(&self) -> &'static str {
-        "ReplayRejection"
-    }
-
-    fn check(&self, _ctx: &InvariantCtx<'_>) -> Option<InvariantViolation> {
-        // ReplayRejection cannot be fully exercised through InvariantCtx alone.
-        // Use `assert_replay_rejection(applied_tx, state, next_block_id, next_ts)` instead.
-        None
-    }
-}
 
 /// A successfully applied transaction must increment the nonce of every signer account
 /// by exactly one.
 ///
-/// # Note
+/// # Enforcement
 ///
-/// This invariant **cannot** be exercised through [`InvariantCtx`] alone because
-/// `InvariantCtx` does not carry a signer-ID list — that information is private to the
-/// `nssa` crate and is consumed by `apply_state_diff` before it returns.  The
-/// `ProtocolInvariant` impl here is a registry placeholder only; it always returns `None`.
+/// This invariant **cannot** be enforced through [`InvariantCtx`] because signer
+/// account IDs are private to the `nssa` crate and are consumed by `apply_state_diff`
+/// before the caller can observe them.  It is therefore **not registered** in
+/// [`assert_invariants`]; calling `assert_invariants` alone does **not** cover
+/// `NonceIncrementCorrectness`.
 ///
-/// Use the standalone [`assert_nonce_increment_correctness`] function instead, passing
-/// the signer IDs derived from the transaction's witness set, the [`NonceSnapshot`]
-/// captured before execution, and the post-execution state.
+/// Every fuzz target that performs state transitions **must** call the standalone
+/// [`assert_nonce_increment_correctness`] function after each successful execution,
+/// passing signer IDs derived from the transaction's witness set:
+///
+/// ```rust,ignore
+/// if let Ok(applied_tx) = result {
+///     let signer_ids = signer_account_ids(&applied_tx);
+///     assert_nonce_increment_correctness(&signer_ids, &nonces_before, &state);
+/// }
+/// ```
 pub struct NonceIncrementCorrectness;
-
-impl ProtocolInvariant for NonceIncrementCorrectness {
-    fn name(&self) -> &'static str {
-        "NonceIncrementCorrectness"
-    }
-
-    fn check(&self, _ctx: &InvariantCtx<'_>) -> Option<InvariantViolation> {
-        // NonceIncrementCorrectness requires explicit signer_ids not available in InvariantCtx.
-        // Use `assert_nonce_increment_correctness(signer_ids, nonces_before, state_after)` instead.
-        None
-    }
-}
 
 // ── Standalone helpers ────────────────────────────────────────────────────────
 
@@ -308,24 +299,124 @@ pub fn assert_nonce_increment_correctness(
     }
 }
 
-// ── Dispatcher ───────────────────────────────────────────────────────────────
+// ── Dispatchers ───────────────────────────────────────────────────────────────
 
-/// Run every registered [`ProtocolInvariant`] and panic with a structured message
-/// on the first violation.
+/// Assert the five state-transition invariants for a single `execute_check_on_state` call.
+///
+/// Covers the invariants that are defined over one transaction execution attempt —
+/// both the failure-isolation properties and the success-outcome correctness properties.
+/// All are enforced from a single call; no standalone helpers are needed:
+///
+/// | Invariant | Active when |
+/// |-----------|-------------|
+/// | [`StateIsolationOnFailure`] | `execution_result` is `Err` |
+/// | [`FailedTxNonceStability`] | `execution_result` is `Err` |
+/// | [`BalanceConservation`] | `execution_result` is `Ok` |
+/// | [`NonceIncrementCorrectness`] | `execution_result` is `Ok` |
+/// | [`ReplayRejection`] | `execution_result` is `Ok` |
+///
+/// # Parameters
+///
+/// * `state_before` — clone of the state captured **before** `execute_check_on_state`.
+/// * `state_after` — live state **after** execution (mutably borrowed for the replay attempt).
+/// * `balances_before` — per-account balance snapshot captured before execution.
+/// * `nonces_before` — per-account nonce snapshot captured before execution.
+/// * `execution_result` — the `Result` returned by `execute_check_on_state`.
+/// * `replay_context` — `(next_block_id, next_timestamp)` used for the mandatory replay attempt.
+///
+/// # Usage
+///
+/// ```rust,ignore
+/// let state_snapshot = state.clone();
+/// let balances_before = BalanceSnapshot(
+///     accounts.iter().map(|&(id, _)| (id, state.get_account_by_id(id).balance)).collect(),
+/// );
+/// let nonces_before = NonceSnapshot(
+///     accounts.iter().map(|&(id, _)| (id, state.get_account_by_id(id).nonce)).collect(),
+/// );
+/// let result = tx.execute_check_on_state(&mut state, block_id, timestamp);
+///
+/// assert_tx_execution_invariants(
+///     &state_snapshot,
+///     &mut state,
+///     balances_before,
+///     nonces_before,
+///     result,
+///     (block_id + 1, timestamp + 1),
+/// );
+/// ```
+pub fn assert_tx_execution_invariants<E>(
+    state_before: &V03State,
+    state_after: &mut V03State,
+    balances_before: BalanceSnapshot,
+    nonces_before: NonceSnapshot,
+    execution_result: Result<NSSATransaction, E>,
+    replay_context: (u64, u64),
+) {
+    let execution_succeeded = execution_result.is_ok();
+    // Clone nonces_before before it is moved into InvariantCtx so the clone
+    // remains available for assert_nonce_increment_correctness on the success path.
+    let nonces_for_nonce_check = nonces_before.clone();
+
+    // ── Three InvariantCtx-based invariants ───────────────────────────────────
+    // The shared reborrow of state_after ends when assert_invariants returns (NLL),
+    // after which state_after is available mutably again for the replay attempt.
+    assert_invariants(&InvariantCtx {
+        state_before,
+        state_after: &*state_after,
+        execution_succeeded,
+        balances_before,
+        nonces_before,
+    });
+
+    // ── Two success-only invariants ───────────────────────────────────────────
+    if let Ok(applied_tx) = execution_result {
+        // Derive signer IDs from the witness set.  ProgramDeployment has no signers.
+        let signer_ids: Vec<nssa::AccountId> = match &applied_tx {
+            NSSATransaction::Public(pt) => pt
+                .witness_set()
+                .signatures_and_public_keys()
+                .iter()
+                .map(|(_, pk)| nssa::AccountId::from(pk))
+                .collect(),
+            NSSATransaction::PrivacyPreserving(pt) => pt
+                .witness_set()
+                .signatures_and_public_keys()
+                .iter()
+                .map(|(_, pk)| nssa::AccountId::from(pk))
+                .collect(),
+            NSSATransaction::ProgramDeployment(_) => vec![],
+        };
+        assert_nonce_increment_correctness(&signer_ids, &nonces_for_nonce_check, state_after);
+        let (next_block_id, next_timestamp) = replay_context;
+        assert_replay_rejection(applied_tx, state_after, next_block_id, next_timestamp);
+    }
+}
+
+/// Run the three [`InvariantCtx`]-based invariants and panic on the first violation.
 ///
 /// Invariants checked:
-/// - [`StateIsolationOnFailure`] — balances unchanged on rejection
-/// - [`BalanceConservation`] — total balance conserved on success
-/// - [`FailedTxNonceStability`] — nonces unchanged on rejection
-/// - [`ReplayRejection`] — stub only; use [`assert_replay_rejection`] directly
-/// - [`NonceIncrementCorrectness`] — stub only; use [`assert_nonce_increment_correctness`] directly
+///
+/// | Invariant | Condition |
+/// |-----------|-----------|
+/// | [`StateIsolationOnFailure`] | balances unchanged on rejection |
+/// | [`BalanceConservation`] | total balance conserved on success |
+/// | [`FailedTxNonceStability`] | nonces unchanged on rejection |
+///
+/// # Prefer [`assert_tx_execution_invariants`] for `execute_check_on_state` call sites
+///
+/// [`ReplayRejection`] and [`NonceIncrementCorrectness`] are not checked here — they
+/// require data unavailable inside [`InvariantCtx`].  Use [`assert_tx_execution_invariants`]
+/// instead for any target that calls `execute_check_on_state`; it enforces all five
+/// invariants in one call.
+///
+/// Reserve `assert_invariants` for contexts where no transaction is available for
+/// replay (e.g. pure state-serialization or encoding targets).
 pub fn assert_invariants(ctx: &InvariantCtx<'_>) {
     let invariants: &[&dyn ProtocolInvariant] = &[
         &StateIsolationOnFailure,
         &BalanceConservation,
         &FailedTxNonceStability,
-        &ReplayRejection,
-        &NonceIncrementCorrectness,
     ];
     for inv in invariants {
         if let Some(violation) = inv.check(ctx) {
