@@ -665,11 +665,15 @@ coverage-all ENGINE="all":
 # logic that the property tests do not fully exercise.
 #
 # Workspace metadata in Cargo.toml configures --release, exclude_globs, and
-# timeout_multiplier automatically; no extra flags are needed here.
+# timeout_multiplier automatically.
 #
-# Output: mutants.out/  (human-readable report, also printed to stdout)
+# --in-place is mandatory: fuzz_props depends on LEZ crates via relative path
+# (../logos-execution-zone/...) — without it cargo-mutants copies the workspace
+# to /tmp and the copy cannot resolve those relative paths.
+#
+# Output: mutants-harness.out/  (human-readable report also printed to stdout)
 mutants-harness:
-    cargo mutants --package fuzz_props
+    cargo mutants --package fuzz_props --in-place --output mutants-harness.out
 
 # Plane B — mutation testing of the LEZ protocol code against the committed corpus.
 #

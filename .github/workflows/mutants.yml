@@ -61,6 +61,7 @@ jobs:
         run: |
           cargo mutants \
             --package fuzz_props \
+            --in-place \
             --output mutants-harness.out
 
       - name: Upload mutants report
