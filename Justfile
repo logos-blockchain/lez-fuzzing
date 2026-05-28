@@ -722,14 +722,50 @@ mutants-protocol PACKAGES="nssa common":
     # --in-place is required because LEZ depends on path crates outside its own
     # directory (e.g. the Rust standard toolchain); without it cargo-mutants copies
     # the workspace to a temp dir where those relative paths would not resolve.
+    #
+    # cargo-mutants >=24 dropped --test-command and only supports --test-tool cargo|nextest.
+    # Work around: create a fake `cargo` wrapper that intercepts `cargo test` and
+    # runs the corpus oracle instead; every other sub-command is delegated to the
+    # real cargo.  We call the cargo-mutants binary directly so that cargo's own
+    # process launch doesn't override the CARGO env var back to the real binary.
+    REAL_CARGO="$(command -v cargo)"
+    FAKE_CARGO=$(mktemp /tmp/fake-cargo-XXXXXX)
+    FAKE_CARGO_LOG=$(mktemp /tmp/fake-cargo-log-XXXXXX.txt)
+    trap 'rm -f "$FAKE_CARGO" "$FAKE_CARGO_LOG"' EXIT
+    # The fake cargo intercepts the test *execution* phase only.
+    # cargo-mutants drives two kinds of "cargo test" invocations:
+    #   Build phase: cargo test --no-run --verbose --package=...   (compile only)
+    #   Test phase:  cargo test --verbose --package=...            (run tests)
+    # The oracle must only replace the test execution phase; the build phase
+    # must be forwarded to the real cargo so mutants are actually compiled.
+    printf '#!/bin/bash\necho "FAKE_CARGO: $*" >> "%s"\n_has_no_run=false\nfor _a in "$@"; do [ "$_a" = "--no-run" ] && _has_no_run=true && break; done\nif [ "${1:-}" = "test" ] && [ "$_has_no_run" = "false" ]; then\n    FUZZ_REPO="%s" exec "%s"\nelse\n    exec "%s" "$@"\nfi\n' \
+        "$FAKE_CARGO_LOG" \
+        "$REPO_DIR" \
+        "${REPO_DIR}/scripts/mutants-corpus-test.sh" \
+        "$REAL_CARGO" > "$FAKE_CARGO"
+    chmod +x "$FAKE_CARGO"
+
+    # Locate the cargo-mutants binary (installed by `cargo install cargo-mutants`).
+    MUTANTS_BIN="$(command -v cargo-mutants 2>/dev/null || true)"
+    if [ -z "$MUTANTS_BIN" ]; then
+        MUTANTS_BIN="$(dirname "$REAL_CARGO")/cargo-mutants"
+    fi
+    if [ ! -x "$MUTANTS_BIN" ]; then
+        echo "ERROR: cargo-mutants not found. Install with: cargo install cargo-mutants --locked"
+        exit 1
+    fi
+
+    # cargo-mutants is a Cargo plugin.  When invoked via `cargo mutants`, Cargo
+    # automatically prepends "mutants" as argv[1].  When we invoke the binary
+    # directly (to keep our CARGO env override alive), we must supply it ourselves.
     cd "$LEZ_DIR"
-    FUZZ_REPO="$REPO_DIR" \
-        cargo mutants \
+    CARGO="$FAKE_CARGO" \
+        "$MUTANTS_BIN" mutants \
             "${PKG_FLAGS[@]}" \
             --in-place \
-            --test-command "${REPO_DIR}/scripts/mutants-corpus-test.sh" \
             --output "${REPO_DIR}/mutants-protocol.out" \
-            --timeout-multiplier 5.0
+            --timeout-multiplier 5.0 \
+        || { echo "--- fake-cargo invocations ---"; cat "$FAKE_CARGO_LOG"; exit 1; }
 
     echo ""
     echo "=== Mutation report summary ==="

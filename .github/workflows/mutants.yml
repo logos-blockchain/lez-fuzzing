@@ -165,21 +165,37 @@ jobs:
             cargo fuzz build "${target}"
           done
 
-      # cargo-mutants is invoked from the LEZ workspace (sibling directory).
-      # FUZZ_REPO is exported so the wrapper script can locate the corpus and
-      # fuzz directory without relying on relative paths.
+      # cargo-mutants >=24 dropped --test-command; intercept "cargo test" with a
+      # fake cargo wrapper that runs the corpus oracle instead.  cargo-mutants is
+      # called as a direct binary (not through `cargo`) so the CARGO env var we
+      # set is respected rather than being overridden by cargo's process launch.
       - name: Run mutation tests against LEZ (nssa + common)
-        env:
-          FUZZ_REPO: ${{ github.workspace }}
-        working-directory: logos-execution-zone
         run: |
-          cargo mutants \
-            --package nssa \
-            --package common \
-            --in-place \
-            --test-command "${{ github.workspace }}/scripts/mutants-corpus-test.sh" \
-            --output "${{ github.workspace }}/mutants-protocol.out" \
-            --timeout-multiplier 5.0
+          REAL_CARGO="$(command -v cargo)"
+          FAKE_CARGO="$(mktemp /tmp/fake-cargo-XXXXXX)"
+          # Intercept the test *execution* phase only; forward the build phase
+          # (cargo test --no-run) to the real cargo so mutants are compiled.
+          # cargo-mutants uses:
+          #   Build phase: cargo test --no-run --verbose --package=...
+          #   Test phase:  cargo test --verbose --package=...
+          printf '#!/bin/bash\n_has_no_run=false\nfor _a in "$@"; do [ "$_a" = "--no-run" ] && _has_no_run=true && break; done\nif [ "${1:-}" = "test" ] && [ "$_has_no_run" = "false" ]; then\n    FUZZ_REPO="%s" exec "%s"\nelse\n    exec "%s" "$@"\nfi\n' \
+              "${{ github.workspace }}" \
+              "${{ github.workspace }}/scripts/mutants-corpus-test.sh" \
+              "$REAL_CARGO" > "$FAKE_CARGO"
+          chmod +x "$FAKE_CARGO"
+          # cargo install places cargo-mutants next to cargo in the same bin dir.
+          MUTANTS_BIN="$(command -v cargo-mutants 2>/dev/null || echo "$(dirname "$REAL_CARGO")/cargo-mutants")"
+          cd "${{ github.workspace }}/logos-execution-zone"
+          # cargo-mutants is a Cargo plugin; when invoked directly (not via
+          # `cargo mutants`) we must supply "mutants" as argv[1] ourselves.
+          CARGO="$FAKE_CARGO" \
+              "$MUTANTS_BIN" mutants \
+                --package nssa \
+                --package common \
+                --in-place \
+                --output "${{ github.workspace }}/mutants-protocol.out" \
+                --timeout-multiplier 5.0
+          rm -f "$FAKE_CARGO"
 
       - name: Upload mutants report
         if: always()
