@@ -57,10 +57,14 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
         .map(|a| (a.account_id, a.balance))
         .collect();
 
-    // Fixed block context — both pipelines use identical block_id and timestamp
-    // so the only variable is the code path (sequencer vs replayer).
-    let block_id: u64 = 2; // block 1 is genesis; this is the first "real" block
-    let timestamp: u64 = 1_000;
+    // Both pipelines use the same block_id and timestamp, drawn from the fuzz corpus
+    // so the fuzzer can explore clock-dependent and block-ID-dependent code paths.
+    // The invariant is path-equivalence at every (block_id, timestamp); it does not
+    // require either value to be constant.  If the protocol rejects block_id=0 or
+    // timestamp=0 as structurally invalid, the existing clock-failure guard below
+    // (lines ~130-133) will return early without panicking — no extra guard needed.
+    let block_id: u64 = u64::arbitrary(&mut u).unwrap_or(2);
+    let timestamp: u64 = u64::arbitrary(&mut u).unwrap_or(1_000);
 
     // Shared base state — cloned once for each pipeline.
     let base_state = V03State::new_with_genesis_accounts(&init_accs, vec![], 0);
