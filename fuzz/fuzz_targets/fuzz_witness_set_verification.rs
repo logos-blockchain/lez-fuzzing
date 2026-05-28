@@ -1,4 +1,4 @@
-#![no_main]
+#![cfg_attr(feature = "fuzzer-libfuzzer", no_main)]
 //! Fuzz target: `WitnessSet` authentication isolation for public transactions.
 //!
 //! The most security-critical property of `WitnessSet` is **message isolation**:
@@ -23,10 +23,9 @@
 
 use arbitrary::{Arbitrary, Unstructured};
 use fuzz_props::arbitrary_types::{ArbPrivateKey, ArbPubTxMessage, ArbWitnessSet};
-use libfuzzer_sys::fuzz_target;
 use nssa::{PublicKey, public_transaction::WitnessSet};
 
-fuzz_target!(|data: &[u8]| {
+fuzz_props::fuzz_entry!(|data: &[u8]| {
     let mut u = Unstructured::new(data);
 
     // ── Invariant 1: NoPanic on adversarial WitnessSet ────────────────────────
