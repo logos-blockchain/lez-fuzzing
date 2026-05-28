@@ -643,6 +643,109 @@ coverage-all ENGINE="all":
         fi
     fi
 
+# ── Mutation testing ──────────────────────────────────────────────────────────
+#
+# Prerequisites (install once):
+#   cargo install cargo-mutants
+#
+# Two planes — run them independently:
+#
+#   Plane A  (fast, ~1-5 min):  mutates fuzz_props invariant logic.
+#            Oracle: cargo test -p fuzz_props --release
+#            Run on every PR that touches fuzz_props/ or fuzz/fuzz_targets/.
+#
+#   Plane B  (slow, ~hours):    mutates LEZ protocol code (nssa, common).
+#            Oracle: all 15 fuzz targets replayed against their committed corpus.
+#            Run weekly or manually to find corpus gaps.
+
+# Plane A — mutation testing of fuzz_props invariant implementations.
+#
+# Mutates every function in fuzz_props and checks whether `cargo test -p fuzz_props
+# --release` catches the mutation.  Surviving mutants identify invariant-checker
+# logic that the property tests do not fully exercise.
+#
+# Workspace metadata in Cargo.toml configures --release, exclude_globs, and
+# timeout_multiplier automatically; no extra flags are needed here.
+#
+# Output: mutants.out/  (human-readable report, also printed to stdout)
+mutants-harness:
+    cargo mutants --package fuzz_props
+
+# Plane B — mutation testing of the LEZ protocol code against the committed corpus.
+#
+# Mutates nssa and common in the logos-execution-zone sibling workspace and uses
+# scripts/mutants-corpus-test.sh as the oracle.  The oracle replays all 15
+# committed libFuzzer corpora (cargo fuzz run -runs=0) against each mutant.
+#
+# A mutant that SURVIVES means there is no corpus input that triggers the
+# relevant protocol invariant at that mutation point — a corpus gap worth
+# investigating with a longer fuzz run.
+#
+# Prerequisites:
+#   - logos-execution-zone cloned at ../logos-execution-zone
+#   - cargo-fuzz installed (cargo install cargo-fuzz)
+#   - cargo-mutants installed (cargo install cargo-mutants --locked)
+#
+# PACKAGES selects which LEZ crates to mutate (space-separated).
+# Default covers the two highest-value protocol crates.
+#
+# Output report: mutants-protocol.out/ in the repository root.
+mutants-protocol PACKAGES="nssa common":
+    #!/bin/bash
+    set -euo pipefail
+    REPO_DIR="$(pwd)"
+
+    if [ ! -d "${REPO_DIR}/../logos-execution-zone" ]; then
+        echo "ERROR: logos-execution-zone not found at ../logos-execution-zone"
+        exit 1
+    fi
+    LEZ_DIR="$(cd "${REPO_DIR}/../logos-execution-zone" && pwd)"
+
+    # Build --package flags (one per crate name)
+    PKG_FLAGS=()
+    for pkg in {{PACKAGES}}; do
+        PKG_FLAGS+=(--package "$pkg")
+    done
+
+    echo "=== Plane B: mutating [{{PACKAGES}}] in logos-execution-zone ==="
+    echo "    Oracle: scripts/mutants-corpus-test.sh (corpus regression, -runs=0)"
+    echo "    Report: ${REPO_DIR}/mutants-protocol.out/"
+    echo ""
+
+    # cargo-mutants must be run from inside the target workspace.
+    # FUZZ_REPO tells the oracle script where to find the corpus and fuzz/ dir.
+    # --output puts the report in our repo root so it's easy to browse/commit.
+    # --in-place is required because LEZ depends on path crates outside its own
+    # directory (e.g. the Rust standard toolchain); without it cargo-mutants copies
+    # the workspace to a temp dir where those relative paths would not resolve.
+    cd "$LEZ_DIR"
+    FUZZ_REPO="$REPO_DIR" \
+        cargo mutants \
+            "${PKG_FLAGS[@]}" \
+            --in-place \
+            --test-command "${REPO_DIR}/scripts/mutants-corpus-test.sh" \
+            --output "${REPO_DIR}/mutants-protocol.out" \
+            --timeout-multiplier 5.0
+
+    echo ""
+    echo "=== Mutation report summary ==="
+    MISSED_FILE="${REPO_DIR}/mutants-protocol.out/missed.txt"
+    CAUGHT_FILE="${REPO_DIR}/mutants-protocol.out/caught.txt"
+    MISSED=$(wc -l < "$MISSED_FILE" 2>/dev/null | tr -d ' ' || echo 0)
+    CAUGHT=$(wc -l < "$CAUGHT_FILE" 2>/dev/null | tr -d ' ' || echo 0)
+    echo "Caught: ${CAUGHT}  |  Survived: ${MISSED}"
+    echo ""
+    if [ "${MISSED}" -gt 0 ]; then
+        echo "Surviving mutants (corpus gaps):"
+        cat "$MISSED_FILE" || true
+        echo ""
+        echo "For each surviving mutant: run 'just fuzz <target>' targeting the"
+        echo "mutated function, add the crashing input to corpus/libfuzz/<target>/,"
+        echo "then re-run 'just mutants-protocol' to confirm it is now CAUGHT."
+    else
+        echo "All mutants caught — corpus covers all tested mutation points."
+    fi
+
 # ── Housekeeping ──────────────────────────────────────────────────────────────
 
 # Remove all Cargo build artefacts (workspace + fuzz sub-crate)
