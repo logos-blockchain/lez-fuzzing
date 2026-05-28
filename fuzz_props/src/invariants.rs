@@ -7,9 +7,25 @@ use nssa_core::account::Nonce;
 pub struct BalanceSnapshot(pub std::collections::HashMap<nssa::AccountId, u128>);
 
 impl BalanceSnapshot {
-    /// Capture current total balance over all known accounts.
+    /// Sum of all recorded account balances.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the sum overflows `u128`.  This indicates a token-inflation bug — i.e.
+    /// the protocol somehow created tokens past `u128::MAX` — and would have been silently
+    /// masked by `saturating_add`.  The generator caps each account balance at
+    /// `u128::MAX / 8` so eight accounts never overflow; any overflow here is therefore
+    /// a genuine protocol violation, not a fuzzer artefact.
+    #[must_use]
     pub fn total(&self) -> u128 {
-        self.0.values().copied().fold(0_u128, u128::saturating_add)
+        self.0
+            .values()
+            .copied()
+            .try_fold(0_u128, u128::checked_add)
+            .expect(
+                "INVARIANT VIOLATION [BalanceOverflow]: sum of account balances exceeded u128::MAX \
+                 \u{2014} token-inflation bug that saturating_add would have silently masked",
+            )
     }
 }
 
@@ -97,6 +113,12 @@ impl ProtocolInvariant for BalanceConservation {
         "BalanceConservation"
     }
 
+    // Overflow in the balance sum IS the violation; using `?` here would silently return
+    // `None` and skip the check, which is worse than the inflation bug it was meant to catch.
+    #[expect(
+        clippy::unwrap_in_result,
+        reason = "overflow panic is the intended signal"
+    )]
     fn check(&self, ctx: &InvariantCtx<'_>) -> Option<InvariantViolation> {
         if ctx.execution_succeeded {
             let total_before = ctx.balances_before.total();
@@ -105,7 +127,12 @@ impl ProtocolInvariant for BalanceConservation {
                 .0
                 .keys()
                 .map(|&id| ctx.state_after.get_account_by_id(id).balance)
-                .fold(0_u128, u128::saturating_add);
+                .try_fold(0_u128, u128::checked_add)
+                .expect(
+                    "INVARIANT VIOLATION [BalanceOverflow]: sum of post-execution account balances \
+                     exceeded u128::MAX \u{2014} token-inflation bug that saturating_add would \
+                     have silently masked",
+                );
             if total_before != total_after {
                 return Some(InvariantViolation {
                     invariant: self.name(),

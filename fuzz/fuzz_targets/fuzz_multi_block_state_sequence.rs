@@ -57,7 +57,12 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
     let starting_total: u128 = init_accs
         .iter()
         .map(|&(id, _)| state.get_account_by_id(id).balance)
-        .fold(0u128, u128::saturating_add);
+        .try_fold(0u128, |acc, x| acc.checked_add(x))
+        .expect(
+            "INVARIANT VIOLATION [BalanceOverflow]: initial sum of genesis account balances \
+             exceeded u128::MAX — per-account balance cap in arbitrary_fuzz_state() should \
+             prevent this; if triggered, the cap has been raised without updating this check",
+        );
 
     // Apply up to 16 transactions across successive blocks.
     let n_txs: u8 = u8::arbitrary(&mut u).unwrap_or(0) % 16;
@@ -119,7 +124,12 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
     let ending_total: u128 = init_accs
         .iter()
         .map(|&(id, _)| state.get_account_by_id(id).balance)
-        .fold(0u128, u128::saturating_add);
+        .try_fold(0u128, |acc, x| acc.checked_add(x))
+        .expect(
+            "INVARIANT VIOLATION [BalanceOverflow]: final sum of genesis account balances \
+             exceeded u128::MAX — token-inflation bug that saturating_add would have \
+             silently masked",
+        );
 
     assert_eq!(
         starting_total,

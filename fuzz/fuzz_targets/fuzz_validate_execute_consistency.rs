@@ -141,11 +141,21 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
             let total_before: u128 = known_ids
                 .iter()
                 .map(|id| state.get_account_by_id(*id).balance)
-                .fold(0u128, u128::saturating_add);
+                .try_fold(0u128, |acc, x| acc.checked_add(x))
+                .expect(
+                    "INVARIANT VIOLATION [BalanceOverflow]: pre-execution sum of known account \
+                     balances exceeded u128::MAX — token-inflation bug that saturating_add would \
+                     have silently masked",
+                );
             let total_after: u128 = known_ids
                 .iter()
                 .map(|id| exec_state.get_account_by_id(*id).balance)
-                .fold(0u128, u128::saturating_add);
+                .try_fold(0u128, |acc, x| acc.checked_add(x))
+                .expect(
+                    "INVARIANT VIOLATION [BalanceOverflow]: post-execution sum of known account \
+                     balances exceeded u128::MAX — token-inflation bug that saturating_add would \
+                     have silently masked",
+                );
             assert_eq!(
                 total_before,
                 total_after,

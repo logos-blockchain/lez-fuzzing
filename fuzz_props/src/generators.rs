@@ -51,12 +51,22 @@ pub struct FuzzAccount {
 ///
 /// Call this before generating transactions so the constructed [`nssa::V03State`]
 /// has a shape controlled by the fuzzer rather than fixed at compile time.
+///
+/// # Balance cap
+///
+/// Each account's balance is capped at `u128::MAX / 8`.  With at most 8 accounts, this
+/// guarantees the sum of all balances fits in a `u128` without overflow.  Balance-
+/// conservation checks can therefore use `checked_add` instead of `saturating_add` to
+/// turn silent overflow into a detected violation, ruling out false-positive panics on
+/// legitimate fuzz inputs.
 pub fn arbitrary_fuzz_state(u: &mut Unstructured<'_>) -> arbitrary::Result<Vec<FuzzAccount>> {
     let n = ((u8::arbitrary(u)? as usize) % 8) + 1; // 1..=8
     std::iter::repeat_with(|| {
         Ok(FuzzAccount {
             account_id: ArbAccountId::arbitrary(u)?.0,
-            balance: u128::arbitrary(u)?,
+            // Divide by 8 so the sum of 8 accounts is at most u128::MAX, preventing
+            // false-positive checked_add panics that would mask real inflation bugs.
+            balance: u128::arbitrary(u)? / 8,
             private_key: ArbPrivateKey::arbitrary(u)?.0,
         })
     })
