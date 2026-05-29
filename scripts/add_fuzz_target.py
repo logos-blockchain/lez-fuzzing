@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fully automates registering a new cargo-fuzz target.
+"""Fully automates registering a new cargo-fuzz / AFL++ fuzz target.
 
 Usage:
     python3 scripts/add_fuzz_target.py <TARGET_NAME>
@@ -7,11 +7,18 @@ Usage:
 Where TARGET_NAME is the full binary name, e.g. fuzz_my_feature.
 
 Actions performed:
-  1. Appends a [[bin]] entry to fuzz/Cargo.toml
+  1. Appends a [[bin]] entry to fuzz/Cargo.toml (one entry covers BOTH
+     the libFuzzer lane and the AFL++ lane — no separate Cargo.toml needed)
   2. Inserts TARGET_NAME into every YAML matrix block in
      .github/workflows/fuzz.yml  (smoke-fuzz, regression)
   3. Inserts TARGET_NAME into the perf-baseline shell for-loop in
      .github/workflows/fuzz.yml
+
+NOTE: A single fuzz/Cargo.toml is the source of truth for both engines.
+  - libFuzzer build:  cargo fuzz build <TARGET>
+  - AFL++ build:      cd fuzz && cargo afl build \\
+                        --no-default-features --features fuzzer-afl \\
+                        --release --bin <TARGET>
 
 Run from the repository root.
 """
@@ -171,6 +178,24 @@ def main() -> None:
 
     append_cargo_bin(target, cargo_toml)
     insert_into_workflow(target, workflow)
+
+    # ── Print build instructions ──────────────────────────────────────────────
+    print()
+    print("Registration complete!  Next steps:")
+    print()
+    print("  1. Implement the harness body in:")
+    print(f"       fuzz/fuzz_targets/{target}.rs")
+    print()
+    print("  2. Verify the libFuzzer (cargo-fuzz) build:")
+    print(f"       RISC0_DEV_MODE=1 cargo fuzz build {target}")
+    print()
+    print("  3. Verify the AFL++ build (single shared fuzz/Cargo.toml):")
+    print(f"       cd fuzz && cargo afl build \\")
+    print(f"         --no-default-features --features fuzzer-afl \\")
+    print(f"         --release --bin {target}")
+    print()
+    print("  4. Run with libFuzzer:  just fuzz-one", target)
+    print("     Run with AFL++:      just fuzz-afl", target)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-#![no_main]
+#![cfg_attr(feature = "fuzzer-libfuzzer", no_main)]
 //! Fuzz target: transaction replay prevention.
 //!
 //! Invariant: a transaction that is accepted in block N must be rejected when
@@ -14,25 +14,20 @@
 //!
 //! # Invariants checked
 //!
-//! The shared framework ([`assert_invariants`]) enforces per-transaction:
+//! [`assert_tx_execution_invariants`] enforces all five invariants per transaction
+//! in one call:
 //! - **StateIsolationOnFailure** — balances unchanged on rejection
 //! - **BalanceConservation** — total balance conserved on success
 //! - **FailedTxNonceStability** — nonces unchanged on rejection
-//!
-//! The dedicated [`assert_replay_rejection`] function enforces:
+//! - **NonceIncrementCorrectness** — signer nonces each increment by exactly one on success
 //! - **ReplayRejection** — accepted tx rejected on replay
 
 use arbitrary::{Arbitrary, Unstructured};
-use common::transaction::NSSATransaction;
 use fuzz_props::generators::{arb_fuzz_native_transfer, arbitrary_fuzz_state, arbitrary_transaction};
-use fuzz_props::invariants::{
-    BalanceSnapshot, InvariantCtx, NonceSnapshot, assert_invariants, assert_nonce_increment_correctness,
-    assert_replay_rejection,
-};
-use libfuzzer_sys::fuzz_target;
+use fuzz_props::invariants::{BalanceSnapshot, NonceSnapshot, assert_tx_execution_invariants};
 use nssa::V03State;
 
-fuzz_target!(|data: &[u8]| {
+fuzz_props::fuzz_entry!(|data: &[u8]| {
     let mut u = Unstructured::new(data);
 
     // Generate a fuzz-driven initial state.
@@ -77,41 +72,17 @@ fuzz_target!(|data: &[u8]| {
 
     // First application — may legitimately fail for state-level reasons.
     let result = tx.execute_check_on_state(&mut state, 1, 0);
-    let execution_succeeded = result.is_ok();
 
-    // ── Shared invariant checks ───────────────────────────────────────────────
-    // Asserts:
-    //   • StateIsolationOnFailure  — balances unchanged on rejection
-    //   • BalanceConservation      — total balance conserved on success
-    //   • FailedTxNonceStability   — nonces unchanged on rejection
-    assert_invariants(&InvariantCtx {
-        state_before: &state_snapshot,
-        state_after: &state,
-        execution_succeeded,
+    // ── All five protocol invariants ──────────────────────────────────────────
+    // A single call enforces every invariant — no standalone helpers needed:
+    //   On rejection: StateIsolationOnFailure + FailedTxNonceStability
+    //   On success:   BalanceConservation + NonceIncrementCorrectness + ReplayRejection
+    assert_tx_execution_invariants(
+        &state_snapshot,
+        &mut state,
         balances_before,
-        nonces_before: nonces_before.clone(),
-    });
-
-    // ── NonceIncrementCorrectness + ReplayRejection ───────────────────────────
-    // First verify every signer's nonce was incremented by exactly one, then
-    // assert that replaying in the next block is rejected (nonce permanently consumed).
-    if let Ok(applied_tx) = result {
-        let signer_ids: Vec<nssa::AccountId> = match &applied_tx {
-            NSSATransaction::Public(t) => t
-                .witness_set()
-                .signatures_and_public_keys()
-                .iter()
-                .map(|(_, pk)| nssa::AccountId::from(pk))
-                .collect(),
-            NSSATransaction::PrivacyPreserving(t) => t
-                .witness_set()
-                .signatures_and_public_keys()
-                .iter()
-                .map(|(_, pk)| nssa::AccountId::from(pk))
-                .collect(),
-            NSSATransaction::ProgramDeployment(_) => vec![],
-        };
-        assert_nonce_increment_correctness(&signer_ids, &nonces_before, &state);
-        assert_replay_rejection(applied_tx, &mut state, 2, 1);
-    }
+        nonces_before,
+        result,
+        (2, 1),
+    );
 });

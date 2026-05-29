@@ -1,4 +1,4 @@
-#![no_main]
+#![cfg_attr(feature = "fuzzer-libfuzzer", no_main)]
 //! Fuzz target: `V03State` Borsh serialization/deserialization.
 //!
 //! The state blob is transmitted between nodes and persisted to disk, so a panic or
@@ -22,10 +22,9 @@
 //!    place for a logic bug — and the fuzzer should be steered towards exercising
 //!    the duplicate-nullifier code path.
 
-use libfuzzer_sys::fuzz_target;
 use nssa::V03State;
 
-fuzz_target!(|data: &[u8]| {
+fuzz_props::fuzz_entry!(|data: &[u8]| {
     // ── Invariant 1: NoPanic ──────────────────────────────────────────────────
     // `borsh::from_slice` must never panic.  If it returns `Err`, we simply
     // return early; only structurally valid blobs proceed to the round-trip check.

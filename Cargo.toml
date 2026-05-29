@@ -43,6 +43,7 @@ clippy.absolute-paths                = "allow"
 clippy.min-ident-chars               = "allow"
 clippy.indexing-slicing              = "allow"
 clippy.little-endian-bytes           = "allow"
+clippy.self-named-module-files       = "allow"
 
 [workspace.lints.rust]
 unsafe_code = "deny"
@@ -83,3 +84,19 @@ hmac-sha512  = "1.1.7"
 itertools    = "0.14.0"
 risc0-build  = "3.0.5"
 logos-blockchain-common-http-client = { git = "https://github.com/logos-blockchain/logos-blockchain.git" }
+
+# ── cargo-mutants configuration (Plane A: mutate fuzz_props invariants) ───────
+# Run with --release to match CI timing.
+# fuzz/fuzz_targets/** entry-points use fuzz_entry!() macros that are not
+# reachable via `cargo test`; mutations there produce false survivors.
+[workspace.metadata.cargo-mutants]
+additional_cargo_args = ["--release"]
+exclude_globs = ["fuzz/fuzz_targets/**"]
+# RISC0 release builds are slower than typical crates; give each mutant extra time.
+timeout_multiplier = 3.0
+# The workspace uses path dependencies outside its own directory
+# (../logos-execution-zone/*).  cargo-mutants normally copies the workspace to a
+# temp directory, but the copy does not include the sibling LEZ directory, so the
+# build fails immediately.  --in-place mutates the original source files in-place
+# and avoids the copy, letting cargo resolve ../logos-execution-zone as usual.
+in_place = true

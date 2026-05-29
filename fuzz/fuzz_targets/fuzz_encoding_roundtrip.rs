@@ -1,4 +1,4 @@
-#![no_main]
+#![cfg_attr(feature = "fuzzer-libfuzzer", no_main)]
 //! Fuzz target: encoding round-trip for all transaction types.
 //!
 //! Invariants exercised:
@@ -18,10 +18,9 @@
 
 use arbitrary::{Arbitrary, Unstructured};
 use fuzz_props::arbitrary_types::{ArbProgramDeploymentTransaction, ArbPublicTransaction};
-use libfuzzer_sys::fuzz_target;
 use nssa::{ProgramDeploymentTransaction, PublicTransaction};
 
-fuzz_target!(|data: &[u8]| {
+fuzz_props::fuzz_entry!(|data: &[u8]| {
     let mut u = Unstructured::new(data);
 
     // ── Test 1: PublicTransaction round-trip ──────────────────────────────────

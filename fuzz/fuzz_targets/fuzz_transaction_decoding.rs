@@ -1,12 +1,11 @@
-#![no_main]
+#![cfg_attr(feature = "fuzzer-libfuzzer", no_main)]
 
 use common::{
     block::{Block, HashableBlockData},
     transaction::NSSATransaction,
 };
-use libfuzzer_sys::fuzz_target;
 
-fuzz_target!(|data: &[u8]| {
+fuzz_props::fuzz_entry!(|data: &[u8]| {
     // Attempt 1: decode as NSSATransaction and verify roundtrip
     if let Ok(tx) = borsh::from_slice::<NSSATransaction>(data) {
         let re_encoded = borsh::to_vec(&tx).expect("re-encode of valid tx must succeed");

@@ -34,8 +34,14 @@ path = "fuzz_targets/fuzz_block_verification.rs"
 test = false
 bench = false
 
+[features]
+default          = ["fuzzer-libfuzzer"]
+fuzzer-libfuzzer = ["libfuzzer-sys", "fuzz_props/fuzzer-libfuzzer"]
+fuzzer-afl       = ["afl",           "fuzz_props/fuzzer-afl"]
+
 [dependencies]
-libfuzzer-sys = "0.4"
+libfuzzer-sys = { version = "0.4", optional = true }
+afl           = { version = "0.15", optional = true }
 arbitrary     = { version = "1", features = ["derive"] }
 borsh         = "1"
 nssa          = { path = "../../logos-execution-zone/nssa" }

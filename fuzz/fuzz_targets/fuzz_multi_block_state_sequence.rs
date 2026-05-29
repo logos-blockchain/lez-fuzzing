@@ -1,4 +1,4 @@
-#![no_main]
+#![cfg_attr(feature = "fuzzer-libfuzzer", no_main)]
 //! Fuzz target: multi-block transaction sequence with long-range invariants.
 //!
 //! Verifies properties that span an entire *sequence* of blocks:
@@ -17,15 +17,14 @@
 //!
 //! # Invariants
 //!
-//! The following per-transaction invariants are checked via the shared framework
-//! ([`fuzz_props::invariants::assert_invariants`]) on every iteration:
+//! The following per-transaction invariants are checked via
+//! [`fuzz_props::invariants::assert_tx_execution_invariants`] on every iteration:
 //!
 //! - **StateIsolationOnFailure** — balances unchanged on rejection.
-//! - **BalanceConservation** — total balance conserved on success.
 //! - **FailedTxNonceStability** — nonces unchanged on rejection.
-//!
-//! In addition, [`assert_replay_rejection`] is called on every successful
-//! transaction (per-block replay check).
+//! - **BalanceConservation** — total balance conserved on success.
+//! - **NonceIncrementCorrectness** — signer nonces each increment by exactly one on success.
+//! - **ReplayRejection** — every successful transaction rejected on replay (per-block).
 //!
 //! The following multi-block aggregate invariant is checked **after** the loop:
 //!
@@ -35,16 +34,11 @@
 //!    the total; only mint/burn bugs or token-inflation bugs would break it.
 
 use arbitrary::{Arbitrary, Unstructured};
-use common::transaction::NSSATransaction;
 use fuzz_props::generators::{arb_fuzz_native_transfer, arbitrary_fuzz_state, arbitrary_transaction};
-use fuzz_props::invariants::{
-    BalanceSnapshot, InvariantCtx, NonceSnapshot, assert_invariants, assert_nonce_increment_correctness,
-    assert_replay_rejection,
-};
-use libfuzzer_sys::fuzz_target;
+use fuzz_props::invariants::{BalanceSnapshot, NonceSnapshot, assert_tx_execution_invariants};
 use nssa::V03State;
 
-fuzz_target!(|data: &[u8]| {
+fuzz_props::fuzz_entry!(|data: &[u8]| {
     let mut u = Unstructured::new(data);
 
     // Generate a fuzz-driven initial state.
@@ -63,7 +57,12 @@ fuzz_target!(|data: &[u8]| {
     let starting_total: u128 = init_accs
         .iter()
         .map(|&(id, _)| state.get_account_by_id(id).balance)
-        .fold(0u128, u128::saturating_add);
+        .try_fold(0u128, |acc, x| acc.checked_add(x))
+        .expect(
+            "INVARIANT VIOLATION [BalanceOverflow]: initial sum of genesis account balances \
+             exceeded u128::MAX — per-account balance cap in arbitrary_fuzz_state() should \
+             prevent this; if triggered, the cap has been raised without updating this check",
+        );
 
     // Apply up to 16 transactions across successive blocks.
     let n_txs: u8 = u8::arbitrary(&mut u).unwrap_or(0) % 16;
@@ -101,43 +100,19 @@ fuzz_target!(|data: &[u8]| {
         let state_snapshot = state.clone();
 
         let result = tx.execute_check_on_state(&mut state, block_id, timestamp);
-        let execution_succeeded = result.is_ok();
 
-        // ── Shared invariant checks ───────────────────────────────────────────
-        // Asserts per-transaction:
-        //   • StateIsolationOnFailure  — balances unchanged on rejection
-        //   • BalanceConservation      — total balance conserved on success
-        //   • FailedTxNonceStability   — nonces unchanged on rejection
-        assert_invariants(&InvariantCtx {
-            state_before: &state_snapshot,
-            state_after: &state,
-            execution_succeeded,
+        // ── All five protocol invariants ──────────────────────────────────────
+        // A single call enforces every invariant — no standalone helpers needed:
+        //   On rejection: StateIsolationOnFailure + FailedTxNonceStability
+        //   On success:   BalanceConservation + NonceIncrementCorrectness + ReplayRejection
+        assert_tx_execution_invariants(
+            &state_snapshot,
+            &mut state,
             balances_before,
-            nonces_before: nonces_before.clone(),
-        });
-
-        // ── NonceIncrementCorrectness + ReplayRejection (per-block) ──────────
-        // First verify every signer's nonce was incremented by exactly one, then
-        // replay in the next block to confirm the nonce is permanently consumed.
-        if let Ok(applied_tx) = result {
-            let signer_ids: Vec<nssa::AccountId> = match &applied_tx {
-                NSSATransaction::Public(t) => t
-                    .witness_set()
-                    .signatures_and_public_keys()
-                    .iter()
-                    .map(|(_, pk)| nssa::AccountId::from(pk))
-                    .collect(),
-                NSSATransaction::PrivacyPreserving(t) => t
-                    .witness_set()
-                    .signatures_and_public_keys()
-                    .iter()
-                    .map(|(_, pk)| nssa::AccountId::from(pk))
-                    .collect(),
-                NSSATransaction::ProgramDeployment(_) => vec![],
-            };
-            assert_nonce_increment_correctness(&signer_ids, &nonces_before, &state);
-            assert_replay_rejection(applied_tx, &mut state, block_id + 1, timestamp + 1);
-        }
+            nonces_before,
+            result,
+            (block_id + 1, timestamp + 1),
+        );
     }
 
     // ── LongRangeBalanceConservation ──────────────────────────────────────────
@@ -149,7 +124,12 @@ fuzz_target!(|data: &[u8]| {
     let ending_total: u128 = init_accs
         .iter()
         .map(|&(id, _)| state.get_account_by_id(id).balance)
-        .fold(0u128, u128::saturating_add);
+        .try_fold(0u128, |acc, x| acc.checked_add(x))
+        .expect(
+            "INVARIANT VIOLATION [BalanceOverflow]: final sum of genesis account balances \
+             exceeded u128::MAX — token-inflation bug that saturating_add would have \
+             silently masked",
+        );
 
     assert_eq!(
         starting_total,
