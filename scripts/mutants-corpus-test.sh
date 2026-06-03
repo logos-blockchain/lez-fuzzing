@@ -38,6 +38,13 @@ targets=(
   fuzz_sequencer_vs_replayer
 )
 
+# cargo-fuzz requires the nightly toolchain (-Zsanitizer=address etc.).
+# When this script is called by `cargo-mutants` the working directory is the
+# LEZ workspace (logos-execution-zone/), whose rust-toolchain.toml pins the
+# stable 1.x compiler.  Change to the fuzzing repo so that rustup resolves
+# the nightly toolchain from lez-fuzzing/rust-toolchain.toml instead.
+cd "${FUZZ_REPO}"
+
 for target in "${targets[@]}"; do
   corpus="${CORPUS_ROOT}/${target}"
   mkdir -p "${corpus}"
