@@ -116,7 +116,7 @@ just fuzz-props
 
 | Target | Protocol layer | Entry point |
 |--------|---------------|-------------|
-| `fuzz_transaction_decoding` | Borsh decoding of all tx/block types (`NSSATransaction`, `Block`, `HashableBlockData`) with roundtrip re-encoding | `fuzz/fuzz_targets/fuzz_transaction_decoding.rs` |
+| `fuzz_transaction_decoding` | Borsh decoding of all tx/block types (`LeeTransaction`, `Block`, `HashableBlockData`) with roundtrip re-encoding | `fuzz/fuzz_targets/fuzz_transaction_decoding.rs` |
 | `fuzz_stateless_verification` | `transaction_stateless_check()` no-panic + idempotency | `fuzz/fuzz_targets/fuzz_stateless_verification.rs` |
 | `fuzz_state_transition` | `V03State` transition: StateIsolationOnFailure + BalanceConservation + ReplayRejection invariants across up to 8 txs with fuzz-driven state | `fuzz/fuzz_targets/fuzz_state_transition.rs` |
 | `fuzz_block_verification` | Block hash integrity: HashRoundTrip · HashPreimage completeness (block_id/prev_hash/timestamp) · TxOrderCommitment | `fuzz/fuzz_targets/fuzz_block_verification.rs` |

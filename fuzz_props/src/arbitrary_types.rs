@@ -2,7 +2,7 @@
 //!
 //! **No changes to `../logos-execution-zone` are required.**
 //!
-//! The Rust orphan rule forbids `impl Arbitrary for NSSATransaction` when both
+//! The Rust orphan rule forbids `impl Arbitrary for LeeTransaction` when both
 //! the trait and the type come from external crates.  Using newtypes (`ArbXxx`)
 //! sidesteps the restriction entirely.
 //!
@@ -10,10 +10,10 @@
 //!
 //! ```rust,ignore
 //! #![no_main]
-//! use fuzz_props::arbitrary_types::ArbNSSATransaction;
+//! use fuzz_props::arbitrary_types::ArbLeeTransaction;
 //! use libfuzzer_sys::fuzz_target;
 //!
-//! fuzz_target!(|wrapped: ArbNSSATransaction| {
+//! fuzz_target!(|wrapped: ArbLeeTransaction| {
 //!     let tx = wrapped.0;
 //!     let Ok(valid_tx) = tx.transaction_stateless_check() else { return; };
 //!     // …
@@ -21,7 +21,7 @@
 //! ```
 
 use arbitrary::{Arbitrary, Result as ArbResult, Unstructured};
-use common::{HashType, block::HashableBlockData, transaction::NSSATransaction};
+use common::{HashType, block::HashableBlockData, transaction::LeeTransaction};
 use nssa::{
     AccountId, PrivateKey, PublicKey, Signature,
     program_deployment_transaction::ProgramDeploymentTransaction,
@@ -210,24 +210,24 @@ impl<'a> Arbitrary<'a> for ArbProgramDeploymentTransaction {
     }
 }
 
-// ── NSSATransaction ───────────────────────────────────────────────────────────
+// ── LeeTransaction ───────────────────────────────────────────────────────────
 // `PrivacyPreservingTransaction` is intentionally excluded: it embeds a risc0
 // ZK receipt that cannot be generated inside a hot fuzzing loop.  This matches
 // the known limitation documented in `docs/fuzzing.md`.
 
-/// Newtype wrapper providing [`Arbitrary`] for [`NSSATransaction`].
+/// Newtype wrapper providing [`Arbitrary`] for [`LeeTransaction`].
 ///
 /// Generates `Public` and `ProgramDeployment` variants only.
 #[derive(Debug)]
-pub struct ArbNSSATransaction(pub NSSATransaction);
+pub struct ArbLeeTransaction(pub LeeTransaction);
 
-impl<'a> Arbitrary<'a> for ArbNSSATransaction {
+impl<'a> Arbitrary<'a> for ArbLeeTransaction {
     fn arbitrary(u: &mut Unstructured<'a>) -> ArbResult<Self> {
         match u8::arbitrary(u)? % 2 {
-            0 => Ok(Self(NSSATransaction::Public(
+            0 => Ok(Self(LeeTransaction::Public(
                 ArbPublicTransaction::arbitrary(u)?.0,
             ))),
-            _ => Ok(Self(NSSATransaction::ProgramDeployment(
+            _ => Ok(Self(LeeTransaction::ProgramDeployment(
                 ArbProgramDeploymentTransaction::arbitrary(u)?.0,
             ))),
         }
@@ -246,7 +246,7 @@ impl<'a> Arbitrary<'a> for ArbHashableBlockData {
     fn arbitrary(u: &mut Unstructured<'a>) -> ArbResult<Self> {
         // 0–7 transactions per block
         let n = (u8::arbitrary(u)? as usize) % 8;
-        let transactions = std::iter::repeat_with(|| ArbNSSATransaction::arbitrary(u).map(|t| t.0))
+        let transactions = std::iter::repeat_with(|| ArbLeeTransaction::arbitrary(u).map(|t| t.0))
             .take(n)
             .collect::<ArbResult<Vec<_>>>()?;
         Ok(Self(HashableBlockData {

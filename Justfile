@@ -788,10 +788,13 @@ mutants-protocol PACKAGES="nssa common":
 
 # ── Housekeeping ──────────────────────────────────────────────────────────────
 
-# Remove all Cargo build artefacts (workspace + fuzz sub-crate)
+# Remove all Cargo build artefacts (workspace + fuzz sub-crate + logos-execution-zone)
+# Each command is prefixed with `-` so that a missing sibling workspace (LEZ not cloned)
+# does not abort the recipe — cargo clean still removes whatever targets are present.
 clean:
-    cargo clean
-    cargo clean --manifest-path fuzz/Cargo.toml
+    -cargo clean
+    -cargo clean --manifest-path fuzz/Cargo.toml
+    -cargo clean --manifest-path ../logos-execution-zone/Cargo.toml
 
 # Remove libFuzzer crash/timeout artifacts for all targets (corpus is kept)
 clean-artifacts:

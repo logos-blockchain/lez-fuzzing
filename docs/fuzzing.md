@@ -103,7 +103,7 @@ just fuzz-regression
 
 | Target | What it fuzzes | Entry point |
 |--------|---------------|-------------|
-| `fuzz_transaction_decoding` | Borsh decoding of `NSSATransaction`, `Block`, and `HashableBlockData`; roundtrip re-encoding of successfully decoded transactions | `fuzz/fuzz_targets/fuzz_transaction_decoding.rs` |
+| `fuzz_transaction_decoding` | Borsh decoding of `LeeTransaction`, `Block`, and `HashableBlockData`; roundtrip re-encoding of successfully decoded transactions | `fuzz/fuzz_targets/fuzz_transaction_decoding.rs` |
 | `fuzz_stateless_verification` | `transaction_stateless_check()` no-panic on arbitrary bytes; idempotency — a transaction that passes the check must pass it again | `fuzz/fuzz_targets/fuzz_stateless_verification.rs` |
 | `fuzz_state_transition` | `execute_check_on_state()` across up to 8 transactions with fuzz-driven initial state and monotonically-advancing block context; asserts **StateIsolationOnFailure** (balances unchanged on rejection), **BalanceConservation** (total balance unchanged on success), and **ReplayRejection** (nonce consumed on first acceptance) | `fuzz/fuzz_targets/fuzz_state_transition.rs` |
 | `fuzz_block_verification` | Three block-hash invariants: **HashRoundTrip** (`HashableBlockData::from(Block)` is lossless), **HashPreimage** (block_id, prev_block_hash, timestamp each individually affect the hash), **TxOrderCommitment** (reversing the transaction list changes the hash) | `fuzz/fuzz_targets/fuzz_block_verification.rs` |
@@ -558,19 +558,19 @@ fuzz target parameters for zero-boilerplate structured fuzzing.
 | `ArbWitnessSet` | `WitnessSet` (0–3 `(Signature, PublicKey)` pairs; mixes valid and invalid) |
 | `ArbPublicTransaction` | `PublicTransaction` (composed from `ArbPubTxMessage` + `ArbWitnessSet`) |
 | `ArbProgramDeploymentTransaction` | `ProgramDeploymentTransaction` (arbitrary bytecode) |
-| `ArbHashableBlockData` | `HashableBlockData` (0–7 `ArbNSSATransaction` entries, random header fields) |
-| `ArbNSSATransaction` | `NSSATransaction` (`Public` or `ProgramDeployment` variant; `PrivacyPreserving` excluded) |
+| `ArbHashableBlockData` | `HashableBlockData` (0–7 `ArbLeeTransaction` entries, random header fields) |
+| `ArbLeeTransaction` | `LeeTransaction` (`Public` or `ProgramDeployment` variant; `PrivacyPreserving` excluded) |
 
 ### `fuzz_props::generators` (libFuzzer helpers + proptest strategies)
 
 | Generator | Covers |
 |-----------|--------|
 | `arbitrary_fuzz_state()` | 1–8 fuzz-driven accounts with arbitrary IDs, balances, and private keys; used by `fuzz_state_transition`, `fuzz_replay_prevention`, `fuzz_validate_execute_consistency`, `fuzz_state_diff_computation` |
-| `arb_fuzz_native_transfer()` | Correctly-signed native-transfer `NSSATransaction` referencing accounts from an `arbitrary_fuzz_state()` result; gives the fuzzer a path to successful state transitions |
-| `arbitrary_transaction()` | Structured `NSSATransaction` (`Public` or `ProgramDeployment`) from unstructured bytes via `ArbNSSATransaction` |
+| `arb_fuzz_native_transfer()` | Correctly-signed native-transfer `LeeTransaction` referencing accounts from an `arbitrary_fuzz_state()` result; gives the fuzzer a path to successful state transitions |
+| `arbitrary_transaction()` | Structured `LeeTransaction` (`Public` or `ProgramDeployment`) from unstructured bytes via `ArbLeeTransaction` |
 | `arb_borsh_transaction_bytes()` | Raw Borsh bytes including invalid encodings |
-| `signer_account_ids()` | Extracts `AccountId`s of all signers from an `NSSATransaction`'s witness set; used to derive signer IDs before `apply_state_diff` consumes the diff |
-| `arb_native_transfer_tx()` | Valid native-transfer `NSSATransaction` between known testnet genesis accounts (proptest strategy) |
+| `signer_account_ids()` | Extracts `AccountId`s of all signers from an `LeeTransaction`'s witness set; used to derive signer IDs before `apply_state_diff` consumes the diff |
+| `arb_native_transfer_tx()` | Valid native-transfer `LeeTransaction` between known testnet genesis accounts (proptest strategy) |
 | `test_accounts()` | Returns `(AccountId, PrivateKey)` pairs from `testnet_initial_state` |
 | `arb_hashable_block_data()` | `HashableBlockData` with 0–8 valid native transfers (proptest strategy) |
 | `arb_invalid_account_state_tx()` | Phantom accounts + overflow amounts — expected to be rejected (IS-3) |

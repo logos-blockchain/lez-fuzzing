@@ -38,7 +38,7 @@
 use std::collections::HashSet;
 
 use arbitrary::{Arbitrary, Unstructured};
-use common::transaction::{NSSATransaction, clock_invocation};
+use common::transaction::{LeeTransaction, clock_invocation};
 use fuzz_props::generators::{arb_fuzz_native_transfer, arbitrary_fuzz_state, arbitrary_transaction};
 use nssa::V03State;
 
@@ -81,7 +81,7 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
 
     // Accepted transaction list — populated here, consumed by the replayer phase
     // so that both pipelines process exactly the same set of transactions.
-    let mut accepted_txs: Vec<NSSATransaction> = Vec::new();
+    let mut accepted_txs: Vec<LeeTransaction> = Vec::new();
 
     let n_txs: u8 = u8::arbitrary(&mut u).unwrap_or(0) % 8;
 

@@ -33,7 +33,7 @@
 use std::collections::HashSet;
 
 use arbitrary::{Arbitrary, Unstructured};
-use fuzz_props::arbitrary_types::ArbNSSATransaction;
+use fuzz_props::arbitrary_types::ArbLeeTransaction;
 use fuzz_props::generators::{arbitrary_fuzz_state, signer_account_ids};
 use fuzz_props::invariants::{NonceSnapshot, assert_nonce_increment_correctness};
 use nssa::V03State;
@@ -52,7 +52,7 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
         .collect();
 
     // Generate and stateless-check a transaction.
-    let tx_raw = match ArbNSSATransaction::arbitrary(&mut u) {
+    let tx_raw = match ArbLeeTransaction::arbitrary(&mut u) {
         Ok(w) => w.0,
         Err(_) => return,
     };

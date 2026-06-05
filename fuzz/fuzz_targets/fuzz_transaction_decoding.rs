@@ -2,19 +2,19 @@
 
 use common::{
     block::{Block, HashableBlockData},
-    transaction::NSSATransaction,
+    transaction::LeeTransaction,
 };
 
 fuzz_props::fuzz_entry!(|data: &[u8]| {
-    // Attempt 1: decode as NSSATransaction and verify roundtrip
-    if let Ok(tx) = borsh::from_slice::<NSSATransaction>(data) {
+    // Attempt 1: decode as LeeTransaction and verify roundtrip
+    if let Ok(tx) = borsh::from_slice::<LeeTransaction>(data) {
         let re_encoded = borsh::to_vec(&tx).expect("re-encode of valid tx must succeed");
-        let tx2 = borsh::from_slice::<NSSATransaction>(&re_encoded)
+        let tx2 = borsh::from_slice::<LeeTransaction>(&re_encoded)
             .expect("second decode of re-encoded tx must succeed");
         assert_eq!(
             re_encoded,
             borsh::to_vec(&tx2).unwrap(),
-            "NSSATransaction roundtrip encoding divergence"
+            "LeeTransaction roundtrip encoding divergence"
         );
     }
 
