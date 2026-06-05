@@ -240,25 +240,28 @@ fn assert_replay_rejection_panics_when_replay_not_rejected() {
     let (from_id, from_key) = &accounts[0];
     let (to_id, _) = &accounts[1];
 
-    // Build a state that contains the sender account with nonce 0 and sufficient balance.
     let genesis: Vec<(nssa::AccountId, u128)> = accounts
         .iter()
         .map(|(id, _)| (*id, 10_000_000_u128))
         .collect();
-    let mut state = V03State::new_with_genesis_accounts(&genesis, vec![], 0);
 
-    // Create a valid, signed transaction with nonce 0 (the initial nonce in state).
     let tx = common::test_utils::create_transaction_native_token_transfer(
         *from_id, 0, *to_id, 100, from_key,
     );
+    let validated = tx
+        .transaction_stateless_check()
+        .expect("test setup: transaction must pass stateless validation");
+    let mut scratch_state = V03State::new_with_genesis_accounts(&genesis, vec![], 0);
+    let applied_tx = validated
+        .execute_check_on_state(&mut scratch_state, 1, 1)
+        .expect("test setup: first execution must succeed (block_id=1, timestamp=1)");
 
-    // We do NOT apply the tx first.  The state nonce is still 0, so calling
-    // execute_check_on_state would SUCCEED — making this a "successful replay".
-    // assert_replay_rejection is supposed to panic here (INVARIANT VIOLATION [ReplayRejection]).
-    // block_id=0 is the genesis block; transactions are only valid from block_id=1 onwards,
-    // so use (1, 0) to ensure execute_check_on_state accepts the tx (triggering the panic).
+    // Replay `applied_tx` (nonce 0) against a FRESH state still at nonce 0.
+    // The nonce matches → execute_check_on_state ACCEPTS the replay — a protocol
+    // violation that assert_replay_rejection must detect and panic on.
+    let mut fresh_state = V03State::new_with_genesis_accounts(&genesis, vec![], 0);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        assert_replay_rejection(tx, &mut state, 1, 0);
+        assert_replay_rejection(applied_tx, &mut fresh_state, 1, 1);
     }));
 
     assert!(
