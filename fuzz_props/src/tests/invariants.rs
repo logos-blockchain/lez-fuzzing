@@ -255,8 +255,10 @@ fn assert_replay_rejection_panics_when_replay_not_rejected() {
     // We do NOT apply the tx first.  The state nonce is still 0, so calling
     // execute_check_on_state would SUCCEED — making this a "successful replay".
     // assert_replay_rejection is supposed to panic here (INVARIANT VIOLATION [ReplayRejection]).
+    // block_id=0 is the genesis block; transactions are only valid from block_id=1 onwards,
+    // so use (1, 0) to ensure execute_check_on_state accepts the tx (triggering the panic).
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        assert_replay_rejection(tx, &mut state, 0, 0);
+        assert_replay_rejection(tx, &mut state, 1, 0);
     }));
 
     assert!(
