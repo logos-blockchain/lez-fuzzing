@@ -654,7 +654,7 @@ coverage-all ENGINE="all":
 #            Oracle: cargo test -p fuzz_props --release
 #            Run on every PR that touches fuzz_props/ or fuzz/fuzz_targets/.
 #
-#   Plane B  (slow, ~hours):    mutates LEZ protocol code (nssa, common).
+#   Plane B  (slow, ~hours):    mutates LEZ protocol code (lee, common).
 #            Oracle: all 15 fuzz targets replayed against their committed corpus.
 #            Run weekly or manually to find corpus gaps.
 
@@ -677,7 +677,7 @@ mutants-harness:
 
 # Plane B — mutation testing of the LEZ protocol code against the committed corpus.
 #
-# Mutates nssa and common in the logos-execution-zone sibling workspace and uses
+# Mutates lee and common in the logos-execution-zone sibling workspace and uses
 # scripts/mutants-corpus-test.sh as the oracle.  The oracle replays all 15
 # committed libFuzzer corpora (cargo fuzz run -runs=0) against each mutant.
 #
@@ -694,7 +694,7 @@ mutants-harness:
 # Default covers the two highest-value protocol crates.
 #
 # Output report: mutants-protocol.out/ in the repository root.
-mutants-protocol PACKAGES="nssa common":
+mutants-protocol PACKAGES="lee common":
     #!/bin/bash
     set -euo pipefail
     REPO_DIR="$(pwd)"
