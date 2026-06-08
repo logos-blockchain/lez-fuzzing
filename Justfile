@@ -39,11 +39,20 @@ fuzz TIME="30":
         cargo fuzz run "$target" "corpus/libfuzz/$target" -- -max_total_time={{TIME}}
     done
 
-# Re-run the saved corpus for every target (regression mode, no new mutations)
-fuzz-regression:
+# Re-run the saved corpus for one or ALL targets (regression mode, no new mutations).
+# When TARGET is omitted every registered target is replayed in sequence.
+# Usage: just fuzz-regression                        # all targets
+#        just fuzz-regression fuzz_state_transition  # single target
+fuzz-regression TARGET="":
     #!/bin/bash
     set -euo pipefail
-    for target in $(cargo fuzz list 2>/dev/null); do
+    TARGET="{{TARGET}}"
+    if [ -z "$TARGET" ]; then
+        TARGETS=($(cargo fuzz list 2>/dev/null))
+    else
+        TARGETS=("$TARGET")
+    fi
+    for target in "${TARGETS[@]}"; do
         echo "=== regression $target ==="
         mkdir -p "corpus/libfuzz/$target"
         cargo fuzz run "$target" "corpus/libfuzz/$target" -- -runs=0
