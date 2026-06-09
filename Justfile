@@ -39,6 +39,51 @@ fuzz TIME="30":
         cargo fuzz run "$target" "corpus/libfuzz/$target" -- -max_total_time={{TIME}}
     done
 
+# Run ALL fuzz targets with a bounded job pool for TIME seconds each (default: 30).
+# At most JOBS targets run simultaneously (default: 4); as soon as one finishes
+# the next queued target is launched, so the pool stays full until all targets
+# have been processed.
+# Targets are discovered automatically from fuzz/Cargo.toml — no edit needed
+# here when a new [[bin]] entry is added.
+#
+# Usage: just fuzz-parallel              # all targets, 30 s each, 4 in parallel
+#        just fuzz-parallel 120          # all targets, 120 s each, 4 in parallel
+#        just fuzz-parallel 120 8        # all targets, 120 s each, 8 in parallel
+fuzz-parallel TIME="30" JOBS="4":
+    #!/bin/bash
+    set -euo pipefail
+    TARGETS=($(cargo fuzz list 2>/dev/null))
+    total=${#TARGETS[@]}
+    echo "Targets: $total  |  max parallel: {{JOBS}}  |  time per target: {{TIME}}s"
+    echo ""
+    PIDS=()
+    failed=0
+
+    for target in "${TARGETS[@]}"; do
+        # Wait for a free slot (block until running jobs < JOBS)
+        while [ "$(jobs -rp | wc -l | tr -d ' ')" -ge "{{JOBS}}" ]; do
+            # bash 4.3+: wait -n returns when any single child exits
+            wait -n 2>/dev/null || sleep 0.5
+        done
+        echo "=== launching $target ({{TIME}}s) ==="
+        mkdir -p "corpus/libfuzz/$target"
+        cargo fuzz run "$target" "corpus/libfuzz/$target" -- -max_total_time={{TIME}} &
+        PIDS+=($!)
+    done
+
+    # Drain the remaining running targets
+    for pid in "${PIDS[@]}"; do
+        wait "$pid" || { echo "WARNING: PID $pid exited with non-zero status"; failed=$((failed + 1)); }
+    done
+
+    echo ""
+    if [ "$failed" -eq 0 ]; then
+        echo "✓ All $total target(s) finished successfully."
+    else
+        echo "WARNING: $failed of $total target(s) reported errors."
+        exit 1
+    fi
+
 # Re-run the saved corpus for one or ALL targets (regression mode, no new mutations).
 # When TARGET is omitted every registered target is replayed in sequence.
 # Usage: just fuzz-regression                        # all targets
