@@ -31,9 +31,8 @@ fuzz/coverage/
 # Local mutation-testing reports (caught.txt, missed.txt, etc.)
 # Created by `just mutants-harness` and `just mutants-protocol`.
 mutants.out/
-mutants-harness.out/
-mutants-protocol.out/
-mutants-protocol.out.backup/
+mutants-harness.out*
+mutants-protocol.out*
 
 # ── Misc ──────────────────────────────────────────────────────────────────────
 # Performance baseline output from `just perf-baseline` or CI
