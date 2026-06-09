@@ -33,6 +33,7 @@ fuzz/coverage/
 mutants.out/
 mutants-harness.out/
 mutants-protocol.out/
+mutants-protocol.out.backup/
 
 # ── Misc ──────────────────────────────────────────────────────────────────────
 # Performance baseline output from `just perf-baseline` or CI

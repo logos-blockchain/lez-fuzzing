@@ -126,3 +126,9 @@ name = "fuzz_merkle_tree"
 path = "fuzz_targets/fuzz_merkle_tree.rs"
 test = false
 bench = false
+
+[[bin]]
+name = "fuzz_genesis_invariants"
+path = "fuzz_targets/fuzz_genesis_invariants.rs"
+test = false
+bench = false
