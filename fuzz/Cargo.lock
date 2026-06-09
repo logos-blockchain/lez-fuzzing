@@ -2084,6 +2084,7 @@ dependencies = [
  "lee",
  "lee_core",
  "libfuzzer-sys",
+ "sha2",
  "testnet_initial_state",
 ]
 

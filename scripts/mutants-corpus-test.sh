@@ -36,6 +36,7 @@ targets=(
   fuzz_apply_state_diff_split_path
   fuzz_multi_block_state_sequence
   fuzz_sequencer_vs_replayer
+  fuzz_merkle_tree
 )
 
 # cargo-fuzz requires the nightly toolchain (-Zsanitizer=address etc.).

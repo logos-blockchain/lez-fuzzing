@@ -44,6 +44,7 @@ libfuzzer-sys = { version = "0.4", optional = true }
 afl           = { version = "0.15", optional = true }
 arbitrary     = { version = "1", features = ["derive"] }
 borsh         = "1"
+sha2          = "0.10"
 nssa          = { path = "../../logos-execution-zone/lee/state_machine",      package = "lee" }
 nssa_core     = { path = "../../logos-execution-zone/lee/state_machine/core", package = "lee_core" }
 common        = { path = "../../logos-execution-zone/lez/common" }
@@ -117,5 +118,11 @@ bench = false
 [[bin]]
 name = "fuzz_sequencer_vs_replayer"
 path = "fuzz_targets/fuzz_sequencer_vs_replayer.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fuzz_merkle_tree"
+path = "fuzz_targets/fuzz_merkle_tree.rs"
 test = false
 bench = false
