@@ -44,7 +44,6 @@ libfuzzer-sys = { version = "0.4", optional = true }
 afl           = { version = "0.15", optional = true }
 arbitrary     = { version = "1", features = ["derive"] }
 borsh         = "1"
-sha2          = "0.10"
 nssa          = { path = "../../logos-execution-zone/lee/state_machine",      package = "lee" }
 nssa_core     = { path = "../../logos-execution-zone/lee/state_machine/core", package = "lee_core" }
 common        = { path = "../../logos-execution-zone/lez/common" }
@@ -130,5 +129,41 @@ bench = false
 [[bin]]
 name = "fuzz_genesis_invariants"
 path = "fuzz_targets/fuzz_genesis_invariants.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fuzz_common_invariants"
+path = "fuzz_targets/fuzz_common_invariants.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fuzz_transaction_properties"
+path = "fuzz_targets/fuzz_transaction_properties.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fuzz_privacy_preserving_witness"
+path = "fuzz_targets/fuzz_privacy_preserving_witness.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fuzz_encoding_privacy_preserving"
+path = "fuzz_targets/fuzz_encoding_privacy_preserving.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fuzz_nullifier_set_roundtrip"
+path = "fuzz_targets/fuzz_nullifier_set_roundtrip.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fuzz_system_account_protection"
+path = "fuzz_targets/fuzz_system_account_protection.rs"
 test = false
 bench = false
