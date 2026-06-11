@@ -1,4 +1,4 @@
-#![no_main]
+#![cfg_attr(feature = "fuzzer-libfuzzer", no_main)]
 //! Fuzz target: `validate_on_state` and `execute_check_on_state` consistency.
 //!
 //! Invariants:
@@ -25,14 +25,12 @@
 //! reachable by the fuzzer.
 
 use arbitrary::{Arbitrary, Unstructured};
-use common::transaction::NSSATransaction;
 use fuzz_props::arbitrary_types::ArbNSSATransaction;
-use fuzz_props::generators::arbitrary_fuzz_state;
+use fuzz_props::generators::{arbitrary_fuzz_state, signer_account_ids};
 use fuzz_props::invariants::{NonceSnapshot, assert_nonce_increment_correctness};
-use libfuzzer_sys::fuzz_target;
 use nssa::V03State;
 
-fuzz_target!(|data: &[u8]| {
+fuzz_props::fuzz_entry!(|data: &[u8]| {
     let mut u = Unstructured::new(data);
 
     // Generate a fuzz-driven initial state.  The state shape — account IDs,
@@ -143,11 +141,21 @@ fuzz_target!(|data: &[u8]| {
             let total_before: u128 = known_ids
                 .iter()
                 .map(|id| state.get_account_by_id(*id).balance)
-                .fold(0u128, u128::saturating_add);
+                .try_fold(0u128, |acc, x| acc.checked_add(x))
+                .expect(
+                    "INVARIANT VIOLATION [BalanceOverflow]: pre-execution sum of known account \
+                     balances exceeded u128::MAX — token-inflation bug that saturating_add would \
+                     have silently masked",
+                );
             let total_after: u128 = known_ids
                 .iter()
                 .map(|id| exec_state.get_account_by_id(*id).balance)
-                .fold(0u128, u128::saturating_add);
+                .try_fold(0u128, |acc, x| acc.checked_add(x))
+                .expect(
+                    "INVARIANT VIOLATION [BalanceOverflow]: post-execution sum of known account \
+                     balances exceeded u128::MAX — token-inflation bug that saturating_add would \
+                     have silently masked",
+                );
             assert_eq!(
                 total_before,
                 total_after,
@@ -160,21 +168,7 @@ fuzz_target!(|data: &[u8]| {
             // consistency checks above: it catches bugs where validate_on_state and
             // execute_check_on_state agree (passing INVARIANT 1) but both increment
             // the wrong account's nonce, or skip the increment entirely.
-            let signer_ids: Vec<nssa::AccountId> = match &applied_tx {
-                NSSATransaction::Public(t) => t
-                    .witness_set()
-                    .signatures_and_public_keys()
-                    .iter()
-                    .map(|(_, pk)| nssa::AccountId::from(pk))
-                    .collect(),
-                NSSATransaction::PrivacyPreserving(t) => t
-                    .witness_set()
-                    .signatures_and_public_keys()
-                    .iter()
-                    .map(|(_, pk)| nssa::AccountId::from(pk))
-                    .collect(),
-                NSSATransaction::ProgramDeployment(_) => vec![],
-            };
+            let signer_ids = signer_account_ids(&applied_tx);
             assert_nonce_increment_correctness(&signer_ids, &nonces_before, &exec_state);
         }
         (Err(_), Err(_)) => {

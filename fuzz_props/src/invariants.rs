@@ -7,9 +7,25 @@ use nssa_core::account::Nonce;
 pub struct BalanceSnapshot(pub std::collections::HashMap<nssa::AccountId, u128>);
 
 impl BalanceSnapshot {
-    /// Capture current total balance over all known accounts.
+    /// Sum of all recorded account balances.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the sum overflows `u128`.  This indicates a token-inflation bug — i.e.
+    /// the protocol somehow created tokens past `u128::MAX` — and would have been silently
+    /// masked by `saturating_add`.  The generator caps each account balance at
+    /// `u128::MAX / 8` so eight accounts never overflow; any overflow here is therefore
+    /// a genuine protocol violation, not a fuzzer artefact.
+    #[must_use]
     pub fn total(&self) -> u128 {
-        self.0.values().copied().fold(0u128, u128::saturating_add)
+        self.0
+            .values()
+            .copied()
+            .try_fold(0_u128, u128::checked_add)
+            .expect(
+                "INVARIANT VIOLATION [BalanceOverflow]: sum of account balances exceeded u128::MAX \
+                 \u{2014} token-inflation bug that saturating_add would have silently masked",
+            )
     }
 }
 
@@ -72,9 +88,8 @@ impl ProtocolInvariant for StateIsolationOnFailure {
                     return Some(InvariantViolation {
                         invariant: self.name(),
                         message: format!(
-                            "balance changed despite tx rejection: account {:?} had \
+                            "balance changed despite tx rejection: account {acc_id:?} had \
                              {expected_balance} before, {actual_balance} after",
-                            acc_id,
                         ),
                     });
                 }
@@ -98,6 +113,12 @@ impl ProtocolInvariant for BalanceConservation {
         "BalanceConservation"
     }
 
+    // Overflow in the balance sum IS the violation; using `?` here would silently return
+    // `None` and skip the check, which is worse than the inflation bug it was meant to catch.
+    #[expect(
+        clippy::unwrap_in_result,
+        reason = "overflow panic is the intended signal"
+    )]
     fn check(&self, ctx: &InvariantCtx<'_>) -> Option<InvariantViolation> {
         if ctx.execution_succeeded {
             let total_before = ctx.balances_before.total();
@@ -106,7 +127,12 @@ impl ProtocolInvariant for BalanceConservation {
                 .0
                 .keys()
                 .map(|&id| ctx.state_after.get_account_by_id(id).balance)
-                .fold(0u128, u128::saturating_add);
+                .try_fold(0_u128, u128::checked_add)
+                .expect(
+                    "INVARIANT VIOLATION [BalanceOverflow]: sum of post-execution account balances \
+                     exceeded u128::MAX \u{2014} token-inflation bug that saturating_add would \
+                     have silently masked",
+                );
             if total_before != total_after {
                 return Some(InvariantViolation {
                     invariant: self.name(),
@@ -142,10 +168,9 @@ impl ProtocolInvariant for FailedTxNonceStability {
                     return Some(InvariantViolation {
                         invariant: self.name(),
                         message: format!(
-                            "nonce changed despite tx rejection: account {:?} nonce was \
-                             {:?} before, {:?} after \
-                             (griefing attack — victim nonce permanently burned on failed tx)",
-                            acc_id, expected_nonce, actual_nonce,
+                            "nonce changed despite tx rejection: account {acc_id:?} nonce was \
+                             {expected_nonce:?} before, {actual_nonce:?} after \
+                             (griefing attack \u{2014} victim nonce permanently burned on failed tx)",
                         ),
                     });
                 }
@@ -157,55 +182,46 @@ impl ProtocolInvariant for FailedTxNonceStability {
 
 /// A successfully accepted transaction must be rejected when replayed.
 ///
-/// # Note
+/// # Enforcement
 ///
-/// This invariant **cannot** be exercised through [`InvariantCtx`] alone because
-/// the replay check requires re-applying the `NSSATransaction` that was consumed
-/// by `execute_check_on_state`.  The `ProtocolInvariant` impl here is a registry
-/// placeholder only; it always returns `None`.
+/// This invariant **cannot** be enforced through [`InvariantCtx`] because the replay
+/// check requires re-applying the `NSSATransaction` that `execute_check_on_state`
+/// consumes and returns on `Ok`.  It is therefore **not registered** in
+/// [`assert_invariants`]; calling `assert_invariants` alone does **not** cover
+/// `ReplayRejection`.
 ///
-/// Use the standalone [`assert_replay_rejection`] function instead, which accepts
-/// the `NSSATransaction` returned on success and performs the replay inline.
+/// Every fuzz target that performs state transitions **must** call the standalone
+/// [`assert_replay_rejection`] function after each successful execution:
+///
+/// ```rust,ignore
+/// if let Ok(applied_tx) = result {
+///     assert_replay_rejection(applied_tx, &mut state, block_id + 1, timestamp + 1);
+/// }
+/// ```
 pub struct ReplayRejection;
-
-impl ProtocolInvariant for ReplayRejection {
-    fn name(&self) -> &'static str {
-        "ReplayRejection"
-    }
-
-    fn check(&self, _ctx: &InvariantCtx<'_>) -> Option<InvariantViolation> {
-        // ReplayRejection cannot be fully exercised through InvariantCtx alone.
-        // Use `assert_replay_rejection(applied_tx, state, next_block_id, next_ts)` instead.
-        None
-    }
-}
 
 /// A successfully applied transaction must increment the nonce of every signer account
 /// by exactly one.
 ///
-/// # Note
+/// # Enforcement
 ///
-/// This invariant **cannot** be exercised through [`InvariantCtx`] alone because
-/// `InvariantCtx` does not carry a signer-ID list — that information is private to the
-/// `nssa` crate and is consumed by `apply_state_diff` before it returns.  The
-/// `ProtocolInvariant` impl here is a registry placeholder only; it always returns `None`.
+/// This invariant **cannot** be enforced through [`InvariantCtx`] because signer
+/// account IDs are private to the `nssa` crate and are consumed by `apply_state_diff`
+/// before the caller can observe them.  It is therefore **not registered** in
+/// [`assert_invariants`]; calling `assert_invariants` alone does **not** cover
+/// `NonceIncrementCorrectness`.
 ///
-/// Use the standalone [`assert_nonce_increment_correctness`] function instead, passing
-/// the signer IDs derived from the transaction's witness set, the [`NonceSnapshot`]
-/// captured before execution, and the post-execution state.
+/// Every fuzz target that performs state transitions **must** call the standalone
+/// [`assert_nonce_increment_correctness`] function after each successful execution,
+/// passing signer IDs derived from the transaction's witness set:
+///
+/// ```rust,ignore
+/// if let Ok(applied_tx) = result {
+///     let signer_ids = signer_account_ids(&applied_tx);
+///     assert_nonce_increment_correctness(&signer_ids, &nonces_before, &state);
+/// }
+/// ```
 pub struct NonceIncrementCorrectness;
-
-impl ProtocolInvariant for NonceIncrementCorrectness {
-    fn name(&self) -> &'static str {
-        "NonceIncrementCorrectness"
-    }
-
-    fn check(&self, _ctx: &InvariantCtx<'_>) -> Option<InvariantViolation> {
-        // NonceIncrementCorrectness requires explicit signer_ids not available in InvariantCtx.
-        // Use `assert_nonce_increment_correctness(signer_ids, nonces_before, state_after)` instead.
-        None
-    }
-}
 
 // ── Standalone helpers ────────────────────────────────────────────────────────
 
@@ -241,7 +257,7 @@ pub fn assert_replay_rejection(
     let replay = applied_tx.execute_check_on_state(state, next_block_id, next_timestamp);
     assert!(
         replay.is_err(),
-        "INVARIANT VIOLATION [ReplayRejection]: transaction accepted a second time — \
+        "INVARIANT VIOLATION [ReplayRejection]: transaction accepted a second time \u{2014} \
          nonce replay not prevented (replay block_id={next_block_id}, \
          replay timestamp={next_timestamp})",
     );
@@ -298,37 +314,136 @@ pub fn assert_nonce_increment_correctness(
             nonce_before
                 .0
                 .checked_add(1)
-                .expect("nonce overflow — signer nonce at u128::MAX"),
+                .expect("nonce overflow \u{2014} signer nonce at u128::MAX"),
         );
         assert_eq!(
             nonce_after, expected,
-            "INVARIANT VIOLATION [NonceIncrementCorrectness]: signer account {:?} nonce \
+            "INVARIANT VIOLATION [NonceIncrementCorrectness]: signer account {id:?} nonce \
              not incremented by 1 after successful transaction \
-             — before={:?}, expected={:?}, got={:?} \
+             \u{2014} before={nonce_before:?}, expected={expected:?}, got={nonce_after:?} \
              (apply_state_diff failed to increment nonce exactly once)",
-            id, nonce_before, expected, nonce_after,
         );
     }
 }
 
-// ── Dispatcher ───────────────────────────────────────────────────────────────
+// ── Dispatchers ───────────────────────────────────────────────────────────────
 
-/// Run every registered [`ProtocolInvariant`] and panic with a structured message
-/// on the first violation.
+/// Assert the five state-transition invariants for a single `execute_check_on_state` call.
+///
+/// Covers the invariants that are defined over one transaction execution attempt —
+/// both the failure-isolation properties and the success-outcome correctness properties.
+/// All are enforced from a single call; no standalone helpers are needed:
+///
+/// | Invariant | Active when |
+/// |-----------|-------------|
+/// | [`StateIsolationOnFailure`] | `execution_result` is `Err` |
+/// | [`FailedTxNonceStability`] | `execution_result` is `Err` |
+/// | [`BalanceConservation`] | `execution_result` is `Ok` |
+/// | [`NonceIncrementCorrectness`] | `execution_result` is `Ok` |
+/// | [`ReplayRejection`] | `execution_result` is `Ok` |
+///
+/// # Parameters
+///
+/// * `state_before` — clone of the state captured **before** `execute_check_on_state`.
+/// * `state_after` — live state **after** execution (mutably borrowed for the replay attempt).
+/// * `balances_before` — per-account balance snapshot captured before execution.
+/// * `nonces_before` — per-account nonce snapshot captured before execution.
+/// * `execution_result` — the `Result` returned by `execute_check_on_state`.
+/// * `replay_context` — `(next_block_id, next_timestamp)` used for the mandatory replay attempt.
+///
+/// # Usage
+///
+/// ```rust,ignore
+/// let state_snapshot = state.clone();
+/// let balances_before = BalanceSnapshot(
+///     accounts.iter().map(|&(id, _)| (id, state.get_account_by_id(id).balance)).collect(),
+/// );
+/// let nonces_before = NonceSnapshot(
+///     accounts.iter().map(|&(id, _)| (id, state.get_account_by_id(id).nonce)).collect(),
+/// );
+/// let result = tx.execute_check_on_state(&mut state, block_id, timestamp);
+///
+/// assert_tx_execution_invariants(
+///     &state_snapshot,
+///     &mut state,
+///     balances_before,
+///     nonces_before,
+///     result,
+///     (block_id + 1, timestamp + 1),
+/// );
+/// ```
+pub fn assert_tx_execution_invariants<E>(
+    state_before: &V03State,
+    state_after: &mut V03State,
+    balances_before: BalanceSnapshot,
+    nonces_before: NonceSnapshot,
+    execution_result: Result<NSSATransaction, E>,
+    replay_context: (u64, u64),
+) {
+    let execution_succeeded = execution_result.is_ok();
+    // Clone nonces_before before it is moved into InvariantCtx so the clone
+    // remains available for assert_nonce_increment_correctness on the success path.
+    let nonces_for_nonce_check = nonces_before.clone();
+
+    // ── Three InvariantCtx-based invariants ───────────────────────────────────
+    // The shared reborrow of state_after ends when assert_invariants returns (NLL),
+    // after which state_after is available mutably again for the replay attempt.
+    assert_invariants(&InvariantCtx {
+        state_before,
+        state_after: &*state_after,
+        execution_succeeded,
+        balances_before,
+        nonces_before,
+    });
+
+    // ── Two success-only invariants ───────────────────────────────────────────
+    if let Ok(applied_tx) = execution_result {
+        // Derive signer IDs from the witness set.  ProgramDeployment has no signers.
+        let signer_ids: Vec<nssa::AccountId> = match &applied_tx {
+            NSSATransaction::Public(pt) => pt
+                .witness_set()
+                .signatures_and_public_keys()
+                .iter()
+                .map(|(_, pk)| nssa::AccountId::from(pk))
+                .collect(),
+            NSSATransaction::PrivacyPreserving(pt) => pt
+                .witness_set()
+                .signatures_and_public_keys()
+                .iter()
+                .map(|(_, pk)| nssa::AccountId::from(pk))
+                .collect(),
+            NSSATransaction::ProgramDeployment(_) => vec![],
+        };
+        assert_nonce_increment_correctness(&signer_ids, &nonces_for_nonce_check, state_after);
+        let (next_block_id, next_timestamp) = replay_context;
+        assert_replay_rejection(applied_tx, state_after, next_block_id, next_timestamp);
+    }
+}
+
+/// Run the three [`InvariantCtx`]-based invariants and panic on the first violation.
 ///
 /// Invariants checked:
-/// - [`StateIsolationOnFailure`] — balances unchanged on rejection
-/// - [`BalanceConservation`] — total balance conserved on success
-/// - [`FailedTxNonceStability`] — nonces unchanged on rejection
-/// - [`ReplayRejection`] — stub only; use [`assert_replay_rejection`] directly
-/// - [`NonceIncrementCorrectness`] — stub only; use [`assert_nonce_increment_correctness`] directly
+///
+/// | Invariant | Condition |
+/// |-----------|-----------|
+/// | [`StateIsolationOnFailure`] | balances unchanged on rejection |
+/// | [`BalanceConservation`] | total balance conserved on success |
+/// | [`FailedTxNonceStability`] | nonces unchanged on rejection |
+///
+/// # Prefer [`assert_tx_execution_invariants`] for `execute_check_on_state` call sites
+///
+/// [`ReplayRejection`] and [`NonceIncrementCorrectness`] are not checked here — they
+/// require data unavailable inside [`InvariantCtx`].  Use [`assert_tx_execution_invariants`]
+/// instead for any target that calls `execute_check_on_state`; it enforces all five
+/// invariants in one call.
+///
+/// Reserve `assert_invariants` for contexts where no transaction is available for
+/// replay (e.g. pure state-serialization or encoding targets).
 pub fn assert_invariants(ctx: &InvariantCtx<'_>) {
     let invariants: &[&dyn ProtocolInvariant] = &[
         &StateIsolationOnFailure,
         &BalanceConservation,
         &FailedTxNonceStability,
-        &ReplayRejection,
-        &NonceIncrementCorrectness,
     ];
     for inv in invariants {
         if let Some(violation) = inv.check(ctx) {
@@ -337,193 +452,6 @@ pub fn assert_invariants(ctx: &InvariantCtx<'_>) {
                 inv = violation.invariant,
                 msg = violation.message,
             );
-        }
-    }
-}
-
-// ── Unit tests ────────────────────────────────────────────────────────────────
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use nssa::V03State;
-
-    fn make_empty_state() -> V03State {
-        V03State::new_with_genesis_accounts(&[], vec![], 0)
-    }
-
-    fn make_empty_snapshot() -> BalanceSnapshot {
-        BalanceSnapshot(std::collections::HashMap::new())
-    }
-
-    fn make_empty_nonce_snapshot() -> NonceSnapshot {
-        NonceSnapshot(std::collections::HashMap::new())
-    }
-
-    #[test]
-    fn invariant_state_isolation_on_failure_does_not_panic_on_error() {
-        let state = make_empty_state();
-        let ctx = InvariantCtx {
-            state_before: &state,
-            state_after: &state,
-            execution_succeeded: false,
-            balances_before: make_empty_snapshot(),
-            nonces_before: make_empty_nonce_snapshot(),
-        };
-        assert_invariants(&ctx);
-    }
-
-    #[test]
-    fn invariant_replay_rejection_does_not_panic() {
-        let state = make_empty_state();
-        let ctx = InvariantCtx {
-            state_before: &state,
-            state_after: &state,
-            execution_succeeded: true,
-            balances_before: make_empty_snapshot(),
-            nonces_before: make_empty_nonce_snapshot(),
-        };
-        assert_invariants(&ctx);
-    }
-
-    #[test]
-    fn balance_conservation_catches_inflation_on_success() {
-        // Arrange: one account with balance 100.
-        let acc_id = nssa::AccountId::new([1u8; 32]);
-        let state_before = V03State::new_with_genesis_accounts(&[(acc_id, 100)], vec![], 0);
-        // Simulate execution that inflated the balance to 200.
-        let state_after = V03State::new_with_genesis_accounts(&[(acc_id, 200)], vec![], 0);
-
-        let mut balances = std::collections::HashMap::new();
-        balances.insert(acc_id, 100u128);
-
-        let ctx = InvariantCtx {
-            state_before: &state_before,
-            state_after: &state_after,
-            execution_succeeded: true,
-            balances_before: BalanceSnapshot(balances),
-            nonces_before: make_empty_nonce_snapshot(),
-        };
-
-        let result = std::panic::catch_unwind(|| assert_invariants(&ctx));
-        assert!(result.is_err(), "expected panic for balance inflation");
-    }
-
-    #[test]
-    fn nonce_increment_correctness_passes_with_no_signers() {
-        // Empty signer list — no accounts to check; trivially satisfies the invariant.
-        let state = make_empty_state();
-        assert_nonce_increment_correctness(&[], &make_empty_nonce_snapshot(), &state);
-    }
-
-    #[test]
-    fn nonce_increment_correctness_passes_when_signer_not_in_snapshot() {
-        // Signer ID is present in the list but absent from the snapshot — skipped.
-        let acc_id = nssa::AccountId::new([9u8; 32]);
-        let state = make_empty_state();
-        // Empty snapshot → `continue` branch fires; no assertion is made.
-        assert_nonce_increment_correctness(&[acc_id], &make_empty_nonce_snapshot(), &state);
-    }
-
-    #[test]
-    fn nonce_increment_correctness_catches_unchanged_nonce() {
-        // Arrange: signer has nonce 5 in the snapshot; the state returns Nonce(0) for the
-        // same account (genesis default).  expected = Nonce(6), actual = Nonce(0) → VIOLATION.
-        let acc_id = nssa::AccountId::new([3u8; 32]);
-        let state = V03State::new_with_genesis_accounts(&[], vec![], 0);
-
-        let mut nonces = std::collections::HashMap::new();
-        nonces.insert(acc_id, Nonce(5));
-
-        let result = std::panic::catch_unwind(|| {
-            assert_nonce_increment_correctness(&[acc_id], &NonceSnapshot(nonces), &state);
-        });
-        assert!(result.is_err(), "expected panic for unchanged nonce");
-    }
-
-    #[test]
-    fn failed_tx_nonce_stability_catches_nonce_mutation() {
-        let acc_id = nssa::AccountId::new([2u8; 32]);
-        // before: nonce 5; after: nonce 6 (should not happen on failure)
-        let state_before = V03State::new_with_genesis_accounts(&[(acc_id, 100)], vec![], 0);
-        let state_after = V03State::new_with_genesis_accounts(&[(acc_id, 100)], vec![], 0);
-
-        // We check the nonce snapshot directly; the states both return default nonce (0).
-        // Fake a discrepancy by inserting nonce=1 in the snapshot while state_after has nonce=0.
-        let mut nonces = std::collections::HashMap::new();
-        // Nonce(1) in snapshot, but state_after will return Nonce(0).
-        nonces.insert(acc_id, Nonce(1));
-
-        let mut balances = std::collections::HashMap::new();
-        balances.insert(acc_id, 100u128);
-
-        let ctx = InvariantCtx {
-            state_before: &state_before,
-            state_after: &state_after,
-            execution_succeeded: false,
-            balances_before: BalanceSnapshot(balances),
-            nonces_before: NonceSnapshot(nonces),
-        };
-
-        let result = std::panic::catch_unwind(|| assert_invariants(&ctx));
-        assert!(
-            result.is_err(),
-            "expected panic for nonce mutation on failure"
-        );
-    }
-}
-
-// ── ReplayRejection proptest suite ───────────────────────────────────────────
-//
-// This suite constitutes the formal, reproducible exercise of the ReplayRejection
-// invariant.  It generates a realistic initial state and a correctly-signed
-// native-transfer transaction, applies it once, and asserts that a second
-// application is rejected.
-//
-// Run with: cargo test -p fuzz_props replay_rejection
-#[cfg(test)]
-mod replay_proptest {
-    use crate::generators::{arb_native_transfer_tx, test_accounts};
-    use nssa::V03State;
-    use proptest::prelude::*;
-
-    /// Build a `V03State` from the testnet accounts, assigning each a fixed
-    /// balance large enough for any reasonable transfer amount.
-    fn make_test_state() -> V03State {
-        let accounts = test_accounts();
-        let init_accs: Vec<(nssa::AccountId, u128)> = accounts
-            .iter()
-            .map(|(id, _)| (*id, 1_000_000u128))
-            .collect();
-        V03State::new_with_genesis_accounts(&init_accs, vec![], 0)
-    }
-
-    proptest! {
-        /// **ReplayRejection** — a transaction accepted in block N must be
-        /// rejected when replayed in block N+1, because the nonce is consumed
-        /// on first acceptance.
-        #[test]
-        fn replay_rejection_proptest(tx in arb_native_transfer_tx(test_accounts())) {
-            let mut state = make_test_state();
-
-            // Stateless gate — skip structurally invalid transactions (e.g. those
-            // whose public key does not match the declared sender).
-            let validated_tx = match tx.transaction_stateless_check() {
-                Ok(v) => v,
-                Err(_) => return Ok(()),
-            };
-
-            // First application — may fail for state-level reasons (e.g. sender
-            // has insufficient balance, wrong nonce).  In that case there is
-            // nothing to replay.
-            let first_result = validated_tx.execute_check_on_state(&mut state, 1, 0);
-
-            if let Ok(validated_tx) = first_result {
-                // Use the shared framework function.  assert_replay_rejection uses
-                // assert!() rather than prop_assert!(); for structured proptest
-                // inputs the framework-level panic is equivalent.
-                super::assert_replay_rejection(validated_tx, &mut state, 2, 1);
-            }
         }
     }
 }

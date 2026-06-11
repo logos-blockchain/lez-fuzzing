@@ -1,4 +1,4 @@
-#![no_main]
+#![cfg_attr(feature = "fuzzer-libfuzzer", no_main)]
 //! Fuzz target: signature creation and verification.
 //!
 //! Invariants exercised:
@@ -12,10 +12,9 @@
 
 use arbitrary::{Arbitrary, Unstructured};
 use fuzz_props::arbitrary_types::{ArbPrivateKey, ArbPublicKey, ArbSignature};
-use libfuzzer_sys::fuzz_target;
 use nssa::{PublicKey, Signature};
 
-fuzz_target!(|data: &[u8]| {
+fuzz_props::fuzz_entry!(|data: &[u8]| {
     let mut u = Unstructured::new(data);
 
     // ── 1. Freshly signed message always verifies with the correct key ─────────

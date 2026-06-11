@@ -6,6 +6,10 @@ edition = "2024"
 [lints]
 workspace = true
 
+[features]
+fuzzer-libfuzzer = []
+fuzzer-afl       = []
+
 [dependencies]
 nssa       = { workspace = true }
 nssa_core  = { workspace = true }

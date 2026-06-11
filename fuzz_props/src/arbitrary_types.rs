@@ -118,13 +118,10 @@ impl<'a> Arbitrary<'a> for ArbPublicKey {
             // rejection path in `is_valid_for` independently.
             let bytes = <[u8; 32]>::arbitrary(u)?;
             let pk = PublicKey::try_new(bytes).unwrap_or_else(|_| {
-                PublicKey::new_from_private_key(
-                    &ArbPrivateKey::arbitrary(u)
-                        .map(|w| w.0)
-                        .unwrap_or_else(|_| {
-                            PrivateKey::try_new([1_u8; 32]).expect("known-good seed")
-                        }),
-                )
+                PublicKey::new_from_private_key(&ArbPrivateKey::arbitrary(u).map_or_else(
+                    |_| PrivateKey::try_new([1_u8; 32]).expect("known-good seed"),
+                    |w| w.0,
+                ))
             });
             Ok(Self(pk))
         }
@@ -145,11 +142,11 @@ impl<'a> Arbitrary<'a> for ArbPubTxMessage {
         let program_id: [u32; 8] = <[u32; 8]>::arbitrary(u)?;
         // Generate 0–7 accounts; nonces vector is given the same length.
         let len = (u8::arbitrary(u)? as usize) % 8;
-        let account_ids = (0..len)
-            .map(|_| ArbAccountId::arbitrary(u).map(|a| a.0))
+        let account_ids = std::iter::repeat_with(|| ArbAccountId::arbitrary(u).map(|a| a.0))
+            .take(len)
             .collect::<ArbResult<Vec<_>>>()?;
-        let nonces = (0..len)
-            .map(|_| ArbNonce::arbitrary(u).map(|n| n.0))
+        let nonces = std::iter::repeat_with(|| ArbNonce::arbitrary(u).map(|n| n.0))
+            .take(len)
             .collect::<ArbResult<Vec<_>>>()?;
         let instruction_data: Vec<u32> = Vec::<u32>::arbitrary(u)?;
         Ok(Self(Message::new_preserialized(
@@ -174,9 +171,11 @@ impl<'a> Arbitrary<'a> for ArbWitnessSet {
     fn arbitrary(u: &mut Unstructured<'a>) -> ArbResult<Self> {
         // 0–3 (signature, public_key) pairs
         let n = (u8::arbitrary(u)? as usize) % 4;
-        let pairs = (0..n)
-            .map(|_| Ok((ArbSignature::arbitrary(u)?.0, ArbPublicKey::arbitrary(u)?.0)))
-            .collect::<ArbResult<Vec<_>>>()?;
+        let pairs = std::iter::repeat_with(|| {
+            Ok((ArbSignature::arbitrary(u)?.0, ArbPublicKey::arbitrary(u)?.0))
+        })
+        .take(n)
+        .collect::<ArbResult<Vec<_>>>()?;
         Ok(Self(WitnessSet::from_raw_parts(pairs)))
     }
 }
@@ -247,8 +246,8 @@ impl<'a> Arbitrary<'a> for ArbHashableBlockData {
     fn arbitrary(u: &mut Unstructured<'a>) -> ArbResult<Self> {
         // 0–7 transactions per block
         let n = (u8::arbitrary(u)? as usize) % 8;
-        let transactions = (0..n)
-            .map(|_| ArbNSSATransaction::arbitrary(u).map(|t| t.0))
+        let transactions = std::iter::repeat_with(|| ArbNSSATransaction::arbitrary(u).map(|t| t.0))
+            .take(n)
             .collect::<ArbResult<Vec<_>>>()?;
         Ok(Self(HashableBlockData {
             block_id: u64::arbitrary(u)?,

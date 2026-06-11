@@ -1,11 +1,10 @@
-#![no_main]
+#![cfg_attr(feature = "fuzzer-libfuzzer", no_main)]
 
 use arbitrary::Unstructured;
 use common::transaction::NSSATransaction;
 use fuzz_props::generators::arbitrary_transaction;
-use libfuzzer_sys::fuzz_target;
 
-fuzz_target!(|data: &[u8]| {
+fuzz_props::fuzz_entry!(|data: &[u8]| {
     let mut u = Unstructured::new(data);
 
     // Path A: try to build a structured transaction from unstructured bytes
