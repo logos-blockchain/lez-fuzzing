@@ -37,13 +37,10 @@ targets=(
   fuzz_multi_block_state_sequence
   fuzz_sequencer_vs_replayer
   fuzz_merkle_tree
-  fuzz_genesis_invariants
-  fuzz_common_invariants
   fuzz_transaction_properties
   fuzz_privacy_preserving_witness
   fuzz_encoding_privacy_preserving
   fuzz_nullifier_set_roundtrip
-  fuzz_system_account_protection
 )
 
 # cargo-fuzz requires the nightly toolchain (-Zsanitizer=address etc.).

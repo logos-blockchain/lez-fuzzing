@@ -632,6 +632,40 @@ flag stubs out ZK proof generation and replaces it with a fast mock implementati
 
 ---
 
+## Mutation testing — the two planes
+
+Mutation testing here runs in two distinct planes, answering two different questions:
+
+- **Plane A — "does a test catch this mutant?"** Run with a standard `cargo test`
+  oracle against the `lee` crate's own unit tests.
+- **Plane B — "does the committed fuzz corpus catch this mutant?"** Run with
+  `just mutants-protocol`, which swaps `cargo test` for a fuzz-corpus replay
+  (`cargo fuzz run … -runs=0`) as the oracle.
+
+A mutant surviving Plane B is **not automatically a corpus gap to fill.** Some
+mutations are only reachable by a fully-valid executing transaction or by a
+deliberately-misbehaving program — neither of which a fuzzer can synthesise from
+random bytes, and both of which are better pinned by deterministic unit tests in
+the `lee` crate. Encoding such scenarios as input-independent fuzz targets only
+duplicates those tests and slows every corpus replay.
+
+The mutants that are **expected** to survive Plane B (and where each is actually
+covered) are catalogued in [`mutants-not-fuzzable.md`](mutants-not-fuzzable.md).
+Reconcile new `mutants-protocol` runs against that list: only a surviving mutant
+**not** on it warrants a new corpus input.
+
+**No input-independent targets.** A fuzz target whose closure ignores its input
+(`|_data|`) is a deterministic unit test, not a fuzzer — it belongs in the LEZ
+crate that owns the code. Three such targets once existed
+(`fuzz_common_invariants`, `fuzz_genesis_invariants`,
+`fuzz_system_account_protection`); their invariants were ported to LEZ unit tests
+and the targets removed. The mutant→test mapping and verification are recorded in
+[`input-independent-target-coverage.md`](input-independent-target-coverage.md).
+When adding a target, drive it from `data`; if a check doesn't depend on the
+input, write it as a unit test in `logos-execution-zone` instead.
+
+---
+
 ## Known Limitations & Future Work
 
 | Item | Notes |

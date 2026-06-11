@@ -127,18 +127,6 @@ test = false
 bench = false
 
 [[bin]]
-name = "fuzz_genesis_invariants"
-path = "fuzz_targets/fuzz_genesis_invariants.rs"
-test = false
-bench = false
-
-[[bin]]
-name = "fuzz_common_invariants"
-path = "fuzz_targets/fuzz_common_invariants.rs"
-test = false
-bench = false
-
-[[bin]]
 name = "fuzz_transaction_properties"
 path = "fuzz_targets/fuzz_transaction_properties.rs"
 test = false
@@ -159,11 +147,5 @@ bench = false
 [[bin]]
 name = "fuzz_nullifier_set_roundtrip"
 path = "fuzz_targets/fuzz_nullifier_set_roundtrip.rs"
-test = false
-bench = false
-
-[[bin]]
-name = "fuzz_system_account_protection"
-path = "fuzz_targets/fuzz_system_account_protection.rs"
 test = false
 bench = false
