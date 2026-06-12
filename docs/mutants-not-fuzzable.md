@@ -35,7 +35,7 @@ mutant on **neither** list warrants a new corpus input.
 
 ---
 
-## Why fuzzing is the wrong tool for these
+## 🧭 Why fuzzing is the wrong tool for these
 
 Fuzzing earns its keep by exploring a large, *unknown* input space to find inputs
 a human wouldn't think of — malformed transactions, adversarial byte sequences,
@@ -74,7 +74,7 @@ to new unit tests — see the companion doc) were all removed.
 
 ---
 
-## Catalogue (Group 1 — structurally unreachable by fuzzing)
+## 📋 Catalogue (Group 1 — structurally unreachable by fuzzing)
 
 The nine mutations reported as MISSED by the `mutants-protocol` run for which
 fuzzing is structurally the wrong tool, with their true coverage. Verified by
@@ -143,7 +143,8 @@ fuzz input can reach this code. The `lee` crate exercises them directly.
   `state::tests::public_changer_claimer_data_change_no_claim_fails` and
   `public_changer_claimer_no_data_change_no_claim_succeeds`.
 
-> Note: an earlier analysis guessed 6 and 7 were *equivalent mutants*. They are
+> [!NOTE]
+> an earlier analysis guessed 6 and 7 were *equivalent mutants*. They are
 > not — they are caught by Plane A, just not reachable by Plane B. They appear
 > "equivalent" only if you restrict yourself to the deployed `authenticated_transfer`
 > program, which is exactly the restriction fuzzing operates under.
@@ -165,7 +166,7 @@ fuzz input can reach this code. The `lee` crate exercises them directly.
 
 ---
 
-## Group 2 — migrated input-independent targets
+## 🔁 Group 2 — migrated input-independent targets
 
 These mutants used to be caught by Plane B via input-independent fuzz targets.
 Those targets were removed and their invariants ported to LEZ unit tests, so the
@@ -207,7 +208,7 @@ port *added* coverage rather than merely relocating it; those are marked **(new)
 
 ---
 
-## Re-verifying
+## ✅ Re-verifying
 
 From `logos-execution-zone/` with the fuzzing repo checked out as a sibling:
 
@@ -226,6 +227,7 @@ registry; a mutation that the corpus replay (`just mutants-protocol`) catches
 belongs in the corpus instead. Across both groups, mutation #4 (the near-equivalent
 cycle-limit weak mutant) is the only one caught by **neither** plane.
 
-> Tip: when reverting, prefer reverse-editing only the mutated line rather than
+> [!TIP]
+> when reverting, prefer reverse-editing only the mutated line rather than
 > `git checkout -- <file>` if you have uncommitted unit tests in the same file —
 > a whole-file checkout would discard them too.

@@ -1,6 +1,6 @@
 # Alternative Approaches vs. Current Implementation
 
-## What the Current Project Does
+## 🧩 What the Current Project Does
 
 The `lez-fuzzing` repository is a **coverage-guided, structured mutation fuzzing system** built on **cargo-fuzz / libFuzzer**, operating as a standalone companion to the Logos Execution Zone (LEZ) codebase. Its key design pillars:
 
@@ -17,7 +17,7 @@ The `lez-fuzzing` repository is a **coverage-guided, structured mutation fuzzing
 
 ---
 
-## Alternative Approaches
+## 🔬 Alternative Approaches
 
 ### 1. AFL++ (American Fuzzy Lop++)
 
@@ -127,7 +127,7 @@ fuzzing replacement.
 
 ---
 
-## Summary Comparison Matrix
+## 📊 Summary Comparison Matrix
 
 | Approach | Bug-finding depth | CI cost | Impl. cost | Complements current? | Recommended action |
 |---|---|---|---|---|---|
@@ -141,7 +141,7 @@ fuzzing replacement.
 
 ---
 
-## Decision-maker Recommendations
+## 🧭 Decision-maker Recommendations
 
 **Already done** (was previously recommended here):
 
@@ -150,16 +150,16 @@ fuzzing replacement.
   with the Plane A / Plane B framework documented in
   [`docs/mutants-not-fuzzable.md`](docs/mutants-not-fuzzable.md).
 - ✅ **Differential testing** — `fuzz_sequencer_vs_replayer`.
+- ✅ **Complete `fuzz.yml` CI matrix** — all **20** libFuzzer targets now run in
+  every `fuzz.yml` matrix (smoke-fuzz · regression · perf-baseline) and the
+  `fuzz-afl.yml` AFL++ lane, including `fuzz_merkle_tree`,
+  `fuzz_transaction_properties`, `fuzz_privacy_preserving_witness`,
+  `fuzz_encoding_privacy_preserving`, and `fuzz_nullifier_set_roundtrip`.
 
 **Remaining higher-ROI next steps, in priority order:**
 
-1. **Finish the `fuzz.yml` CI matrix** — it lists 15 of the 20 libFuzzer targets;
-   add `fuzz_merkle_tree`, `fuzz_transaction_properties`,
-   `fuzz_privacy_preserving_witness`, `fuzz_encoding_privacy_preserving`, and
-   `fuzz_nullifier_set_roundtrip`.
-
-2. **Honggfuzz on Linux CI only** — hardware-counter coverage finds different paths;
+1. **Honggfuzz on Linux CI only** — hardware-counter coverage finds different paths;
    gated to Linux since Apple Silicon has no HW counters.
 
-3. **Formal verification of core invariants** (balance conservation, replay
+2. **Formal verification of core invariants** (balance conservation, replay
    prevention) — a long-term supplement, not a replacement.

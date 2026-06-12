@@ -35,6 +35,11 @@ jobs:
           - fuzz_apply_state_diff_split_path
           - fuzz_multi_block_state_sequence
           - fuzz_sequencer_vs_replayer
+          - fuzz_merkle_tree
+          - fuzz_transaction_properties
+          - fuzz_privacy_preserving_witness
+          - fuzz_encoding_privacy_preserving
+          - fuzz_nullifier_set_roundtrip
     steps:
       - uses: actions/checkout@v4
 
@@ -218,6 +223,11 @@ jobs:
           - fuzz_apply_state_diff_split_path
           - fuzz_multi_block_state_sequence
           - fuzz_sequencer_vs_replayer
+          - fuzz_merkle_tree
+          - fuzz_transaction_properties
+          - fuzz_privacy_preserving_witness
+          - fuzz_encoding_privacy_preserving
+          - fuzz_nullifier_set_roundtrip
     steps:
       - uses: actions/checkout@v4
       - name: Checkout logos-execution-zone
@@ -285,7 +295,12 @@ jobs:
             fuzz_program_deployment_lifecycle \
             fuzz_apply_state_diff_split_path \
             fuzz_multi_block_state_sequence \
-            fuzz_sequencer_vs_replayer; do
+            fuzz_sequencer_vs_replayer \
+            fuzz_merkle_tree \
+            fuzz_transaction_properties \
+            fuzz_privacy_preserving_witness \
+            fuzz_encoding_privacy_preserving \
+            fuzz_nullifier_set_roundtrip; do
             echo "=== $target ===" | tee -a perf_baseline.txt
             cargo fuzz run "$target" -- -max_total_time=30 2>&1 \
               | grep -E "exec/s|execs_per_sec" | tail -1 | tee -a perf_baseline.txt

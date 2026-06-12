@@ -1,4 +1,10 @@
-# Fuzzing Guide
+<div align="center">
+
+# 🔬 Fuzzing Guide
+
+**The full developer guide to running, extending, and triaging the LEZ fuzzing infrastructure.**
+
+</div>
 
 This document covers how to run fuzz targets, add new targets, minimise failures,
 and convert findings into regression tests.
@@ -9,7 +15,7 @@ directory that must be cloned separately).
 
 ---
 
-## Architecture
+## 🏗️ Architecture
 
 The fuzz workspace (`fuzz/`) is a single Cargo workspace that covers **both** fuzzing
 engines via Cargo features.  No separate Cargo manifest is needed.
@@ -38,7 +44,7 @@ The `cfg` attributes in the macro expansion resolve against the **calling crate'
 
 ---
 
-## Prerequisites
+## 🧰 Prerequisites
 
 ```bash
 # libFuzzer lane
@@ -61,7 +67,7 @@ cargo install cargo-afl
 
 ---
 
-## Repository Setup
+## 📁 Repository Setup
 
 `lez-fuzzing` is a **standalone repository** — it does **not** use git submodules.
 It expects the LEZ codebase to be cloned at `../logos-execution-zone` relative to itself.
@@ -79,7 +85,7 @@ git clone <LEZ_FUZZING_REPO_URL>   lez-fuzzing
 
 ---
 
-## How to Run
+## ▶️ How to Run
 
 All fuzz targets must be run with `RISC0_DEV_MODE=1` to disable expensive ZK
 proof generation. The `just` recipes handle this automatically.
@@ -99,7 +105,7 @@ just fuzz-regression
 
 ---
 
-## Available Fuzz Targets
+## 🎯 Available Fuzz Targets
 
 | Target | What it fuzzes | Entry point |
 |--------|---------------|-------------|
@@ -118,10 +124,15 @@ just fuzz-regression
 | `fuzz_apply_state_diff_split_path` | **SplitPathEquivalence**: for every known account, `validate_on_state` + `apply_state_diff` must produce exactly the same balance, nonce, data, and program_owner as `execute_check_on_state`; **NonceIncrementCorrectness**: nonce after the split path equals nonce after the direct path for all signer accounts (catches bugs in the two-step `apply_state_diff` nonce-increment logic) | `fuzz/fuzz_targets/fuzz_apply_state_diff_split_path.rs` |
 | `fuzz_multi_block_state_sequence` | **LongRangeBalanceConservation**: total genesis-account balance identical before and after all N (≤ 16) blocks; **FailedTxNonceStability**: every genesis-account nonce unchanged after a rejected transaction; **PerBlockReplayRejection**: every transaction accepted in block B is rejected in block B+1 (cumulative nonce-interaction coverage) | `fuzz/fuzz_targets/fuzz_multi_block_state_sequence.rs` |
 | `fuzz_sequencer_vs_replayer` | **SequencerReplayerEquivalence**: for every known account (genesis ∪ diff-declared), the sequencer path (`validate_on_state` → `apply_state_diff`) and the replayer path (`execute_check_on_state`) must produce identical balance, nonce, data, and program_owner after applying a full block of up to 8 transactions plus the mandatory clock invocation; **ReplayerAcceptsAllSequencerTxs**: every transaction accepted by `validate_on_state` must also be accepted by `execute_check_on_state`; **ClockConsistency**: the mandatory clock invocation must succeed on both paths and leave both states identical | `fuzz/fuzz_targets/fuzz_sequencer_vs_replayer.rs` |
+| `fuzz_merkle_tree` | Commitment Merkle tree via the commitment set: **ProofSome**, **ProofValid** (leaf + auth path recomputes the root), **NonMembershipNone**, **IndicesSequential** | `fuzz/fuzz_targets/fuzz_merkle_tree.rs` |
+| `fuzz_transaction_properties` | Transaction property invariants: **HashDeterministic** / **HashNonDefault**, **SignerIds** derived from witness keys & non-empty, **AffectedAccountsContainSigners**, **PublicDiffNonEmptyOnSuccess** | `fuzz/fuzz_targets/fuzz_transaction_properties.rs` |
+| `fuzz_privacy_preserving_witness` | `privacy_preserving_transaction::WitnessSet`: **CorrectVerification** (witness for message A passes `signatures_are_valid_for(A)`), **MessageIsolation**, **SignerIdsMatchWitnessKeys** | `fuzz/fuzz_targets/fuzz_privacy_preserving_witness.rs` |
+| `fuzz_encoding_privacy_preserving` | Privacy-preserving encoding: **MessageEncodingRoundtrip**, **TxEncodingDeterministic** / **NonEmpty** | `fuzz/fuzz_targets/fuzz_encoding_privacy_preserving.rs` |
+| `fuzz_nullifier_set_roundtrip` | `NullifierSet` Borsh serialisation: **NullifierSetRoundtrip** (decode→encode identity for the hand-written impl) | `fuzz/fuzz_targets/fuzz_nullifier_set_roundtrip.rs` |
 
 ---
 
-## How to Add a New Fuzz Target
+## ➕ How to Add a New Fuzz Target
 
 ### Step 1 — Scaffold with `just new-target`
 
@@ -159,6 +170,7 @@ which:
 - Inserts the target name into every strategy matrix and the perf-baseline shell
   loop in [`.github/workflows/fuzz.yml`](../.github/workflows/fuzz.yml).
 
+> [!TIP]
 > **Manual fallback:** if you create a target without `just new-target`, add the
 > entry yourself:
 >
@@ -197,12 +209,13 @@ cd fuzz && cargo afl build \
 
 ---
 
-## AFL++ Parallel Fuzzing Lane
+## 🔀 AFL++ Parallel Fuzzing Lane
 
 ### Prerequisites
 
 Install AFL++ natively on your machine.
 
+> [!NOTE]
 > **Note on Linux package versions**: The `afl++` package in Debian stable (Bookworm)
 > and Ubuntu LTS is several major versions behind the current AFL++ 4.x series and may
 > be incompatible with `cargo-afl`. **Build from source** for a current version.
@@ -222,6 +235,7 @@ cd ..
 cargo install cargo-afl
 ```
 
+> [!IMPORTANT]
 > **macOS: run `afl-system-config` once before fuzzing** — AFL++ uses System V shared
 > memory (`shmget`) to pass coverage bitmaps between the fuzzer and the target.  macOS
 > ships with very small defaults (`kern.sysv.shmmax = 4 MB`, `kern.sysv.shmmni = 32`)
@@ -245,6 +259,7 @@ cargo install cargo-afl
 > each restart.  The `just fuzz-afl` and `just fuzz-afl-parallel` recipes **do not**
 > call this automatically because it requires `sudo`.
 
+> [!IMPORTANT]
 > **macOS: crash reporter must be disabled** — AFL++ detects the macOS `ReportCrash`
 > daemon and aborts if it is active (it delays crash notifications and causes AFL++ to
 > mis-classify crashes as timeouts).  The `just fuzz-afl` and `just fuzz-afl-parallel`
@@ -361,24 +376,24 @@ The nightly AFL++ CI workflow has two jobs:
 
 | Job | Triggers | Matrix |
 |-----|----------|--------|
-| `afl-smoke` | nightly + `workflow_dispatch` | 7 priority targets, 120 s each |
-| `afl-coverage` | nightly, `needs: afl-smoke` | 3 key targets; LLVM HTML report |
+| `afl-smoke` | nightly + `workflow_dispatch` | all 20 targets, 60 s each |
+| `afl-coverage-aggregate` | nightly, `needs: afl-smoke` | all 20 targets merged into one LLVM HTML report |
 
-The smoke job:
-1. Builds the target with `cargo afl build --no-default-features --features fuzzer-afl`
-2. Runs `afl-fuzz` for 120 s in `aflplusplus/aflplusplus:v4.40c` container
-3. Syncs new queue entries into `fuzz/corpus/<target>/` and opens a corpus PR
-4. Uploads crashes/hangs as a workflow artifact
+The smoke job (one matrix leg per target, on `ubuntu-latest`):
+1. Builds AFL++ from source, then builds the target with `cargo afl build --no-default-features --features fuzzer-afl`
+2. Runs `afl-fuzz` for 60 s (`timeout 60`)
+3. Reports edge-bitmap coverage to the job step summary
+4. Uploads the queue/crashes/hangs as a workflow artifact
 
-The coverage job:
-1. Downloads the smoke findings
-2. Rebuilds with `RUSTFLAGS="-C instrument-coverage"`
-3. Runs all corpus + queue inputs through the binary
-4. Merges `.profraw` → `.profdata` → HTML report via `llvm-cov show`
+The coverage-aggregate job:
+1. Downloads every smoke leg's findings
+2. Rebuilds all 20 targets with `RUSTFLAGS="-C instrument-coverage"`
+3. Runs all checked-in corpus + AFL queue inputs through each binary
+4. Merges every `.profraw` → one `.profdata` → a single combined HTML report via `llvm-cov show`
 
 ---
 
-## Updating the LEZ Dependency
+## 🔄 Updating the LEZ Dependency
 
 `lez-fuzzing` reads LEZ source directly from `../logos-execution-zone`. To pick up LEZ
 changes, simply update that repo:
@@ -401,7 +416,7 @@ just update-lez
 
 ---
 
-## Minimising & Reproducing Failures
+## 🐛 Minimising & Reproducing Failures
 
 When `cargo fuzz` finds a crash it writes an artifact to
 `fuzz/artifacts/fuzz_<target>/crash-<hash>`.
@@ -440,7 +455,7 @@ Open a PR. The `regression` CI job will permanently block re-introduction of thi
 
 ---
 
-## Coverage Reports
+## 📊 Coverage Reports
 
 ### Step 1 — libFuzzer coverage (via `cargo fuzz coverage`)
 
@@ -476,7 +491,7 @@ automates steps 2–5 and uploads the report as a workflow artifact.
 
 ---
 
-## Invariant Framework
+## 🛡️ Invariant Framework
 
 Shared invariants live in `fuzz_props/src/invariants.rs`. There are two layers:
 
@@ -538,7 +553,7 @@ To add a new invariant:
 
 ---
 
-## Input Generators
+## 🎲 Input Generators
 
 The `fuzz_props` crate provides two layers of input generation:
 
@@ -579,7 +594,7 @@ fuzz target parameters for zero-boilerplate structured fuzzing.
 
 ---
 
-## Performance Baseline
+## ⚡ Performance Baseline
 
 Measured on a 4-core x86_64 Linux runner with `RISC0_DEV_MODE=1`:
 
@@ -600,7 +615,13 @@ Measured on a 4-core x86_64 Linux runner with `RISC0_DEV_MODE=1`:
 | `fuzz_apply_state_diff_split_path` | ~5 000 exec/sec *(estimate)* |
 | `fuzz_multi_block_state_sequence` | ~1 000 exec/sec *(estimate)* |
 | `fuzz_sequencer_vs_replayer` | ~2 000 exec/sec *(estimate)* |
+| `fuzz_merkle_tree` | ~20 000 exec/sec *(estimate)* |
+| `fuzz_transaction_properties` | ~15 000 exec/sec *(estimate)* |
+| `fuzz_privacy_preserving_witness` | ~15 000 exec/sec *(estimate)* |
+| `fuzz_encoding_privacy_preserving` | ~50 000 exec/sec *(estimate)* |
+| `fuzz_nullifier_set_roundtrip` | ~100 000 exec/sec *(estimate)* |
 
+> [!NOTE]
 > Throughput figures for the five new targets are rough estimates; run `just perf-baseline`
 > locally or check the `perf-baseline` CI artifact for up-to-date measurements.
 
@@ -617,7 +638,7 @@ just fuzz-afl-parallel fuzz_state_transition $(nproc) 3600
 
 ---
 
-## ZK-Proof Cost Warning
+## ⚠️ ZK-Proof Cost Warning
 
 `PrivacyPreservingTransaction` uses `risc0-zkvm` (seconds per proof).
 All fuzz targets **must** set `RISC0_DEV_MODE=1` in the environment and the `just`
@@ -632,7 +653,7 @@ flag stubs out ZK proof generation and replaces it with a fast mock implementati
 
 ---
 
-## Mutation testing — the two planes
+## 🧬 Mutation testing — the two planes
 
 Mutation testing here runs in two distinct planes, answering two different questions:
 
@@ -666,7 +687,7 @@ from `data`; if a check doesn't depend on the input, write it as a unit test in
 
 ---
 
-## Known Limitations & Future Work
+## 🚧 Known Limitations & Future Work
 
 | Item | Notes |
 |------|-------|
