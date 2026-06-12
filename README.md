@@ -70,13 +70,6 @@ cargo install cargo-fuzz
 cargo install just            # optional but recommended
 ```
 
-> [!NOTE]
-> **Why nightly?** `cargo-fuzz` passes `-Zsanitizer=address` and
-> `-Zinstrument-coverage` (unstable flags) to `rustc`, and depends on the
-> `llvm-tools-preview` nightly component for coverage reporting.
-> `rust-toolchain.toml` pins the whole repository to nightly, so you never
-> need an explicit `+nightly` flag.
-
 ### 2. Setup
 
 ```bash
@@ -139,14 +132,6 @@ just fuzz-props
 | 20 | `fuzz_nullifier_set_roundtrip` | `NullifierSet` Borsh serialisation: NullifierSetRoundtrip (decode→encode identity for the hand-written impl) |
 
 Each target lives at `fuzz/fuzz_targets/<name>.rs`.
-
-> [!NOTE]
-> **Input-independent checks are not fuzz targets here.** Deterministic invariants
-> that ignore their input (e.g. genesis-account contents, getter/round-trip
-> identities, the system-account-modification guard) belong in `logos-execution-zone`
-> unit tests, not the fuzz corpus. See
-> [`docs/mutants-not-fuzzable.md`](docs/mutants-not-fuzzable.md) for the policy and
-> the mutant→test mapping.
 
 ---
 
@@ -215,13 +200,6 @@ GitHub Actions runs these workflows on every push/PR and nightly:
 | `fuzz-afl.yml` | AFL++ lane over the same targets/corpus |
 | `mutants.yml` | Mutation testing (`cargo-mutants`) |
 | `lint.yml` | Formatting + Clippy |
-
-> [!NOTE]
-> All **20** libFuzzer targets are wired into every `fuzz.yml` matrix
-> (smoke-fuzz · regression · perf-baseline), the `fuzz-afl.yml` AFL++ lane, and
-> the `mutants.yml` corpus-replay job. New targets are added automatically by
-> `just new-target`; see [`docs/fuzzing.md`](docs/fuzzing.md) for the manual
-> fallback instructions.
 
 ---
 
