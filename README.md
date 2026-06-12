@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🦀 Lez-fuzzing
+# <img src="logos.avif" alt="" height="32" valign="middle"> Lez-fuzzing
 
 **Coverage-guided fuzzing & adversarial testing infrastructure for the
 [Logos Execution Zone (LEZ)](https://github.com/) protocol.**
