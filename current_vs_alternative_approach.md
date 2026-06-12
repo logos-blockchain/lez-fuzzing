@@ -143,19 +143,6 @@ fuzzing replacement.
 
 ## 🧭 Decision-maker Recommendations
 
-**Already done** (was previously recommended here):
-
-- ✅ **AFL++ parallel lane** — `just fuzz-afl` + `fuzz-afl.yml`.
-- ✅ **`cargo-mutants`** — `just mutants-harness` / `mutants-protocol` + `mutants.yml`,
-  with the Plane A / Plane B framework documented in
-  [`docs/mutants-not-fuzzable.md`](docs/mutants-not-fuzzable.md).
-- ✅ **Differential testing** — `fuzz_sequencer_vs_replayer`.
-- ✅ **Complete `fuzz.yml` CI matrix** — all **20** libFuzzer targets now run in
-  every `fuzz.yml` matrix (smoke-fuzz · regression · perf-baseline) and the
-  `fuzz-afl.yml` AFL++ lane, including `fuzz_merkle_tree`,
-  `fuzz_transaction_properties`, `fuzz_privacy_preserving_witness`,
-  `fuzz_encoding_privacy_preserving`, and `fuzz_nullifier_set_roundtrip`.
-
 **Remaining higher-ROI next steps, in priority order:**
 
 1. **Honggfuzz on Linux CI only** — hardware-counter coverage finds different paths;
