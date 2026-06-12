@@ -659,10 +659,10 @@ Reconcile new `mutants-protocol` runs against that list: only a surviving mutant
 crate that owns the code. Three such targets once existed
 (`fuzz_common_invariants`, `fuzz_genesis_invariants`,
 `fuzz_system_account_protection`); their invariants were ported to LEZ unit tests
-and the targets removed. The mutant→test mapping and verification are recorded in
-[`input-independent-target-coverage.md`](input-independent-target-coverage.md).
-When adding a target, drive it from `data`; if a check doesn't depend on the
-input, write it as a unit test in `logos-execution-zone` instead.
+and the targets removed. The mutant→test mapping is recorded under "Group 2" in
+[`mutants-not-fuzzable.md`](mutants-not-fuzzable.md). When adding a target, drive it
+from `data`; if a check doesn't depend on the input, write it as a unit test in
+`logos-execution-zone` instead.
 
 ---
 

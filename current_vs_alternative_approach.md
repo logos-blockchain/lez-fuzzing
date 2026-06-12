@@ -11,8 +11,8 @@ The `lez-fuzzing` repository is a **coverage-guided, structured mutation fuzzing
 | Rich generators | [`fuzz_props::generators`](fuzz_props/src/generators.rs) adds `proptest` strategies for pathological sequences, phantom-account attacks, overflow amounts, replay sequences |
 | Protocol invariants | [`fuzz_props::invariants`](fuzz_props/src/invariants.rs) expresses zero-mutation-on-rejection and replay-rejection as reusable `ProtocolInvariant` objects |
 | ZK-awareness | `RISC0_DEV_MODE=1` stubs out `risc0-zkvm` proofs, enabling ~5 000–200 000 exec/sec depending on target |
-| 15 dedicated targets | Covers encoding, signature verification, stateless checks, state transitions, state diffs, replay prevention, validate/execute consistency, block verification, state serialization, witness-set verification, program deployment lifecycle, split-path equivalence, multi-block sequences, sequencer-vs-replayer differential |
-| CI integration | GitHub Actions smoke, regression, and performance-baseline jobs run on every PR |
+| 20 dedicated targets | Covers encoding, signature verification, stateless checks, state transitions, state diffs, replay prevention, validate/execute consistency, block verification, state serialization, witness-set verification, program deployment lifecycle, split-path equivalence, multi-block sequences, sequencer-vs-replayer differential, Merkle-tree invariants, transaction properties, privacy-preserving witness/encoding, and nullifier-set round-trips. Input-independent invariant checks (genesis contents, getters, system-account guard) are kept as **LEZ unit tests**, not targets — see [`docs/mutants-not-fuzzable.md`](docs/mutants-not-fuzzable.md) |
+| CI integration | GitHub Actions libFuzzer (`fuzz.yml`), AFL++ (`fuzz-afl.yml`), and mutation-testing (`mutants.yml`) workflows run on every PR / nightly |
 | Pre-seeded corpus | Hundreds of minimised seed files in [`fuzz/corpus/`](fuzz/corpus/) ensure regressions are caught instantly |
 
 ---
@@ -32,7 +32,7 @@ The `lez-fuzzing` repository is a **coverage-guided, structured mutation fuzzing
 | CI ergonomics | Requires AFL++ binary in CI image | `cargo install cargo-fuzz` only |
 | Rust integration | `cargo-afl` | `cargo-fuzz` |
 
-**Decision-maker view**: AFL++ and libFuzzer find *different* bugs because they use different mutation heuristics. Running both on the same corpus is the industry-standard "belt and suspenders" approach. [`docs/fuzzing.md`](docs/fuzzing.md:355) already lists `just fuzz-afl` as planned future work. **Incremental cost is low** — the same [`fuzz_props`](fuzz_props/src/lib.rs) crate and seed corpus work unchanged.
+**Decision-maker view**: ✅ **Implemented.** AFL++ and libFuzzer find *different* bugs because they use different mutation heuristics, and running both on the same corpus is the industry-standard "belt and suspenders" approach. AFL++ is now a live lane: `just fuzz-afl` / `just fuzz-afl-parallel` and the `.github/workflows/fuzz-afl.yml` nightly job, sharing the same [`fuzz_props`](fuzz_props/src/lib.rs) crate and seed corpus at **zero migration cost**.
 
 ---
 
@@ -111,7 +111,19 @@ The extension noted in [`docs/fuzzing.md`](docs/fuzzing.md:356) is:
 | Execution time | Slow (recompile per mutation) | Continuous |
 | Output | Surviving mutants = assertion gaps | Crash artifacts |
 
-**Decision-maker view**: `cargo-mutants` would **audit the invariant assertions themselves** — revealing if [`assert_invariants()`](fuzz_props/src/invariants.rs) has gaps. Three invariants are fully implemented and registered in `assert_invariants()`: [`StateIsolationOnFailure`](fuzz_props/src/invariants.rs:60), [`BalanceConservation`](fuzz_props/src/invariants.rs:94), and [`FailedTxNonceStability`](fuzz_props/src/invariants.rs:130). Two additional invariants — [`ReplayRejection`](fuzz_props/src/invariants.rs:167) and [`NonceIncrementCorrectness`](fuzz_props/src/invariants.rs:194) — are enforced exclusively via standalone helpers (`assert_replay_rejection`, `assert_nonce_increment_correctness`) and are **not** in the `assert_invariants()` registry; this is intentional because they require data consumed before `InvariantCtx` is built. This is a **complementary quality gate**, not a fuzzing replacement. Low cost (~1 day), highly useful before an external security audit.
+**Decision-maker view**: ✅ **Implemented.** `cargo-mutants` runs in two modes —
+`just mutants-harness` (mutates `fuzz_props`, oracle = `cargo test`, auditing the
+invariant assertions themselves) and `just mutants-protocol` (mutates the LEZ
+`lee`/`common` crates, oracle = a fuzz-corpus replay), with a `mutants.yml` CI job.
+The two oracles correspond to a deliberate **Plane A / Plane B** split — see
+[`docs/mutants-not-fuzzable.md`](docs/mutants-not-fuzzable.md), which catalogues
+the mutants each plane is and isn't expected to catch and why. (For reference, the
+`fuzz_props` registry still implements [`StateIsolationOnFailure`](fuzz_props/src/invariants.rs),
+[`BalanceConservation`](fuzz_props/src/invariants.rs), and
+[`FailedTxNonceStability`](fuzz_props/src/invariants.rs) in `assert_invariants()`,
+with `ReplayRejection` and `NonceIncrementCorrectness` enforced via standalone
+helpers outside the registry.) This is a **complementary quality gate**, not a
+fuzzing replacement.
 
 ---
 
@@ -120,19 +132,34 @@ The extension noted in [`docs/fuzzing.md`](docs/fuzzing.md:356) is:
 | Approach | Bug-finding depth | CI cost | Impl. cost | Complements current? | Recommended action |
 |---|---|---|---|---|---|
 | **Current (cargo-fuzz/libFuzzer)** | High | Medium | ✅ Done | — | Maintain & expand |
-| AFL++ | High (different bugs) | Medium | Low | ✅ Yes | Add `just fuzz-afl` (already planned) |
+| AFL++ | High (different bugs) | Medium | ✅ Done | ✅ Yes | ✅ Implemented (`just fuzz-afl`, `fuzz-afl.yml`) |
 | Honggfuzz | High on Linux | Medium | Medium | ✅ Yes | Add for Linux CI only |
 | proptest-only | Low–medium | Low | ✅ Done | Already present | Keep as unit-test layer |
 | Differential (sequencer/replayer) | Very high (new bug class) | Medium | ✅ Done | ✅ Yes | ✅ Implemented (`fuzz_sequencer_vs_replayer`) |
 | Formal verification | Exhaustive (selected invariants) | Very high | Very high | ✅ Yes | Long-term supplement |
-| Mutation testing (`cargo-mutants`) | Measures assertion quality | High | Low | ✅ Yes | Pre-audit quality gate |
+| Mutation testing (`cargo-mutants`) | Measures assertion quality | High | ✅ Done | ✅ Yes | ✅ Implemented (`just mutants-harness` / `mutants-protocol`) |
 
 ---
 
 ## Decision-maker Recommendations
 
-**Highest-ROI next steps, in priority order:**
+**Already done** (was previously recommended here):
 
-1. **Add AFL++ as a parallel fuzzing lane** (`just fuzz-afl`) — zero corpus migration cost, discovers different mutation paths through the same targets as libFuzzer.
+- ✅ **AFL++ parallel lane** — `just fuzz-afl` + `fuzz-afl.yml`.
+- ✅ **`cargo-mutants`** — `just mutants-harness` / `mutants-protocol` + `mutants.yml`,
+  with the Plane A / Plane B framework documented in
+  [`docs/mutants-not-fuzzable.md`](docs/mutants-not-fuzzable.md).
+- ✅ **Differential testing** — `fuzz_sequencer_vs_replayer`.
 
-2. **Add `cargo-mutants`** before any external security audit — proves the invariant assertions in [`fuzz_props/src/invariants.rs`](fuzz_props/src/invariants.rs) are actually capable of catching the bugs they claim to detect.
+**Remaining higher-ROI next steps, in priority order:**
+
+1. **Finish the `fuzz.yml` CI matrix** — it lists 15 of the 20 libFuzzer targets;
+   add `fuzz_merkle_tree`, `fuzz_transaction_properties`,
+   `fuzz_privacy_preserving_witness`, `fuzz_encoding_privacy_preserving`, and
+   `fuzz_nullifier_set_roundtrip`.
+
+2. **Honggfuzz on Linux CI only** — hardware-counter coverage finds different paths;
+   gated to Linux since Apple Silicon has no HW counters.
+
+3. **Formal verification of core invariants** (balance conservation, replay
+   prevention) — a long-term supplement, not a replacement.

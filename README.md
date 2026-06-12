@@ -37,11 +37,20 @@ lez-fuzzing/
 │   │   ├── fuzz_witness_set_verification.rs
 │   │   ├── fuzz_program_deployment_lifecycle.rs
 │   │   ├── fuzz_apply_state_diff_split_path.rs
-│   │   └── fuzz_multi_block_state_sequence.rs
+│   │   ├── fuzz_multi_block_state_sequence.rs
+│   │   ├── fuzz_sequencer_vs_replayer.rs
+│   │   ├── fuzz_merkle_tree.rs
+│   │   ├── fuzz_transaction_properties.rs
+│   │   ├── fuzz_privacy_preserving_witness.rs
+│   │   ├── fuzz_encoding_privacy_preserving.rs
+│   │   └── fuzz_nullifier_set_roundtrip.rs   # 20 targets total — see table below
 │   └── corpus/             # Curated seed inputs (one dir per target)
 ├── .github/
 │   └── workflows/
-│       └── fuzz.yml        # CI: smoke-fuzz · regression · proptest · perf
+│       ├── fuzz.yml        # CI: smoke-fuzz · regression · proptest · perf (libFuzzer)
+│       ├── fuzz-afl.yml    # CI: AFL++ lane
+│       ├── mutants.yml     # CI: mutation testing (cargo-mutants)
+│       └── lint.yml        # CI: fmt + clippy
 ├── scripts/
 │   └── add_fuzz_target.py  # Automates new-target scaffolding (called by just new-target)
 └── docs/
@@ -130,6 +139,19 @@ just fuzz-props
 | `fuzz_program_deployment_lifecycle` | `V03State::transition_from_program_deployment_transaction` no-panic + BalanceIsolation (deployment must not move tokens) + StateIsolationOnFailure | `fuzz/fuzz_targets/fuzz_program_deployment_lifecycle.rs` |
 | `fuzz_apply_state_diff_split_path` | SplitPathEquivalence: `validate_on_state + apply_state_diff` == `execute_check_on_state` for all known accounts (balance, nonce, data, program_owner); NonceIncrementCorrectness | `fuzz/fuzz_targets/fuzz_apply_state_diff_split_path.rs` |
 | `fuzz_multi_block_state_sequence` | LongRangeBalanceConservation across up to 16 blocks + FailedTxNonceStability (nonce must not change on rejection) + PerBlockReplayRejection | `fuzz/fuzz_targets/fuzz_multi_block_state_sequence.rs` |
+| `fuzz_sequencer_vs_replayer` | Differential: sequencer path (`validate_on_state` → `apply_state_diff`) vs replayer path (`execute_check_on_state`) — SequencerReplayerEquivalence + ReplayerAcceptsAllSequencerTxs + ClockConsistency | `fuzz/fuzz_targets/fuzz_sequencer_vs_replayer.rs` |
+| `fuzz_merkle_tree` | Commitment Merkle tree via the commitment set: ProofSome · ProofValid (leaf + auth path recomputes the root) · NonMembershipNone · IndicesSequential | `fuzz/fuzz_targets/fuzz_merkle_tree.rs` |
+| `fuzz_transaction_properties` | Transaction property invariants: HashDeterministic/HashNonDefault, SignerIds derived from witness keys & non-empty, AffectedAccountsContainSigners, PublicDiffNonEmptyOnSuccess | `fuzz/fuzz_targets/fuzz_transaction_properties.rs` |
+| `fuzz_privacy_preserving_witness` | `privacy_preserving_transaction::WitnessSet`: CorrectVerification (witness for msg A passes `signatures_are_valid_for(A)`) + MessageIsolation + SignerIdsMatchWitnessKeys | `fuzz/fuzz_targets/fuzz_privacy_preserving_witness.rs` |
+| `fuzz_encoding_privacy_preserving` | Privacy-preserving encoding: MessageEncodingRoundtrip + TxEncodingDeterministic/NonEmpty | `fuzz/fuzz_targets/fuzz_encoding_privacy_preserving.rs` |
+| `fuzz_nullifier_set_roundtrip` | `NullifierSet` Borsh serialisation: NullifierSetRoundtrip (decode→encode identity for the hand-written impl) | `fuzz/fuzz_targets/fuzz_nullifier_set_roundtrip.rs` |
+
+> **Input-independent checks are not fuzz targets here.** Deterministic invariants
+> that ignore their input (e.g. genesis-account contents, getter/round-trip
+> identities, the system-account-modification guard) belong in `logos-execution-zone`
+> unit tests, not the fuzz corpus. See
+> [`docs/mutants-not-fuzzable.md`](docs/mutants-not-fuzzable.md) for the policy and
+> the mutant→test mapping.
 
 ---
 
@@ -187,20 +209,23 @@ just clean-all        # All of the above
 
 ## CI
 
-GitHub Actions runs four jobs on every push/PR and nightly:
+GitHub Actions runs these workflows on every push/PR and nightly:
 
-| Job | What it does |
-|-----|-------------|
-| `smoke-fuzz` (matrix, 9 targets) | Builds + runs each target for 60 s |
-| `regression` (matrix, 9 targets) | Replays the saved corpus (`-runs=0`) |
-| `proptest` | `cargo test -p fuzz_props --release` |
-| `perf-baseline` (nightly only) | Measures exec/sec per target, uploads `perf_baseline.txt` |
+| Workflow | What it does |
+|----------|-------------|
+| `fuzz.yml` — `smoke-fuzz` (matrix) | Builds + runs each libFuzzer target for 60 s |
+| `fuzz.yml` — `regression` (matrix) | Replays the saved corpus (`-runs=0`) |
+| `fuzz.yml` — `proptest` | `cargo test -p fuzz_props --release` |
+| `fuzz.yml` — `perf-baseline` (nightly only) | Measures exec/sec per target, uploads `perf_baseline.txt` |
+| `fuzz-afl.yml` | AFL++ lane over the same targets/corpus |
+| `mutants.yml` | Mutation testing (`cargo-mutants`) |
+| `lint.yml` | Formatting + Clippy |
 
-> **Note:** The CI matrix currently lists the original 9 targets. The 5 new targets
-> (`fuzz_state_serialization`, `fuzz_witness_set_verification`,
-> `fuzz_program_deployment_lifecycle`, `fuzz_apply_state_diff_split_path`,
-> `fuzz_multi_block_state_sequence`) need to be added to `.github/workflows/fuzz.yml`
-> — see [`docs/fuzzing.md`](docs/fuzzing.md) for the manual fallback instructions.
+> **Note:** The `fuzz.yml` matrix currently lists 15 of the 20 libFuzzer targets.
+> Still missing: `fuzz_merkle_tree`, `fuzz_transaction_properties`,
+> `fuzz_privacy_preserving_witness`, `fuzz_encoding_privacy_preserving`, and
+> `fuzz_nullifier_set_roundtrip` — add them to `.github/workflows/fuzz.yml`. See
+> [`docs/fuzzing.md`](docs/fuzzing.md) for the manual fallback instructions.
 
 ---
 
