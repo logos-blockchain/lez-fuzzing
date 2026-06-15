@@ -107,20 +107,16 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
         );
     }
 
-    // ── INVARIANT [LengthMatchAccepted] ───────────────────────────────────────
-    // When public_keys.len() == ciphertexts.len() == 0, `try_from_circuit_output`
-    // must succeed.
-    //
-    // Original check: `if public_keys.len() != output.ciphertexts.len() { Err }`
-    // With mutation `!=` → `==`: `if 0 == 0` → `true` → Err is returned.
-    // Our assertion that the call SUCCEEDS catches the mutation.
+    // ── INVARIANT [CircuitOutputAccepted] ─────────────────────────────────────
+    // `try_from_circuit_output` must succeed for a well-formed (empty) circuit
+    // output, mapping the output fields onto the resulting `Message`.
     {
         let empty_output = PrivacyPreservingCircuitOutput {
             public_pre_states: vec![],
             public_post_states: vec![],
             new_commitments: vec![],
             new_nullifiers: vec![],
-            ciphertexts: vec![],
+            encrypted_private_post_states: vec![],
             block_validity_window: BlockValidityWindow::new_unbounded(),
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
         };
@@ -128,15 +124,13 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
         let result = PPMessage::try_from_circuit_output(
             vec![], // public_account_ids
             vec![], // nonces
-            vec![], // public_keys (0 entries)
             empty_output,
         );
         assert!(
             result.is_ok(),
-            "INVARIANT VIOLATION [LengthMatchAccepted]: \
-             try_from_circuit_output must accept when keys(0) == ciphertexts(0), \
-             got: {:?} — \
-             possible mutation: != changed to == in the length check",
+            "INVARIANT VIOLATION [CircuitOutputAccepted]: \
+             try_from_circuit_output must accept a well-formed empty output, \
+             got: {:?}",
             result.err(),
         );
     }
