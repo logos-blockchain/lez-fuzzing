@@ -349,45 +349,96 @@ fuzz-afl TARGET="" TIME="30":
         echo "  Format for a report: just afl-fmt <crash-file>"
     fi
 
-# Run AFL++ with N parallel instances (1 main + N-1 secondary) for TIME seconds.
-# Requires that afl-fuzz is on PATH; all instances share afl-output/{{TARGET}}/.
-# On macOS the crash reporter is disabled automatically for the duration of the
-# run and re-enabled when the script exits.
+# Run AFL++ over all targets, up to JOBS targets at a time (one instance each),
+# for TIME seconds per target. As soon as one target finishes the next queued
+# target is launched, so the pool stays full until every target is done.
+# Requires that afl-fuzz is on PATH.
+# On macOS this needs the System V shared-memory limits raised and the crash
+# reporter disabled (both require admin). If the current user can use sudo the
+# recipe does it automatically; otherwise it asks an administrator to run
+# `sudo afl-system-config` once (sets the shm limits and disables the reporter —
+# both persist until reboot) and exits.
 #
-# Usage: just fuzz-afl-parallel fuzz_state_transition
-#        just fuzz-afl-parallel fuzz_state_transition 8 600
-fuzz-afl-parallel TARGET WORKERS="4" TIME="300":
+# Usage: just fuzz-afl-parallel              # all targets, 30 s each, 4 at a time
+#        just fuzz-afl-parallel 600          # all targets, 600 s each, 4 at a time
+#        just fuzz-afl-parallel 600 8        # all targets, 600 s each, 8 at a time
+fuzz-afl-parallel TIME="30" JOBS="4":
     #!/bin/bash
     set -euo pipefail
-    BINARY="fuzz/target/release/{{TARGET}}"
-    CORPUS="corpus/libfuzz/{{TARGET}}"   # seed from libFuzzer corpus
-    OUTPUT="afl-output/{{TARGET}}"
-    mkdir -p "$CORPUS" "$OUTPUT"
-    if [ ! -f "$BINARY" ]; then
-        echo "Binary not found — building first…"
-        just afl-build-target {{TARGET}}
-    fi
-    # ── macOS: disable crash reporter for the duration of this run ───────────
+
+    # ── Collect targets to run ────────────────────────────────────────────────
+    TARGETS=($(cargo fuzz list 2>/dev/null))
+
+    # ── macOS: shared-memory limits + crash reporter (both need admin) ────────
     if [ "$(uname)" = "Darwin" ]; then
         SL=/System/Library; PL=com.apple.ReportCrash
+        # Can this user run privileged commands without prompting for a password?
+        if sudo -n true 2>/dev/null; then CAN_SUDO=1; else CAN_SUDO=0; fi
+
+        # The default kern.sysv.shmmax (4 MB) is too small for AFL++'s shm
+        # segments, so shmget() fails with EINVAL under parallel fuzzing.
+        NEED_SHMMAX=524288000
+        CUR_SHMMAX=$(sysctl -n kern.sysv.shmmax 2>/dev/null || echo 0)
+        if [ "$CUR_SHMMAX" -lt "$NEED_SHMMAX" ]; then
+            if [ "$CAN_SUDO" = 1 ]; then
+                echo "macOS: raising shared-memory limits for parallel AFL++ instances…"
+                sudo sysctl kern.sysv.shmmax=524288000 kern.sysv.shmmin=1 \
+                            kern.sysv.shmseg=48 kern.sysv.shmall=131072000 \
+                            kern.sysv.shmmni=1024 >/dev/null || true
+            else
+                echo "ERROR: System V shared-memory limits are too low for parallel AFL++"
+                echo "       (kern.sysv.shmmax=$CUR_SHMMAX, need >= $NEED_SHMMAX) and this"
+                echo "       user cannot use sudo."
+                echo ""
+                echo "       Ask an administrator to run this once (persists until reboot):"
+                echo ""
+                echo "         sudo afl-system-config"
+                echo ""
+                echo "       It raises the shm limits and disables the crash reporter."
+                echo "       Then re-run: just fuzz-afl-parallel {{TIME}} {{JOBS}}"
+                exit 1
+            fi
+        fi
+
+        # Disable the crash reporter for the duration of the run. The per-user
+        # agent needs no privileges; the system daemon does, so only attempt it
+        # when we can sudo (an admin's `afl-system-config` covers it otherwise).
         echo "macOS: disabling crash reporter (AFL++ requirement)…"
-        launchctl unload -w "${SL}/LaunchAgents/${PL}.plist"            2>/dev/null || true
-        sudo launchctl unload -w "${SL}/LaunchDaemons/${PL}.Root.plist" 2>/dev/null || true
+        launchctl unload -w "${SL}/LaunchAgents/${PL}.plist" 2>/dev/null || true
+        if [ "$CAN_SUDO" = 1 ]; then
+            sudo launchctl unload -w "${SL}/LaunchDaemons/${PL}.Root.plist" 2>/dev/null || true
+        fi
         trap '
             echo "Re-enabling macOS crash reporter…"
             SL=/System/Library; PL=com.apple.ReportCrash
-            launchctl load -w "${SL}/LaunchAgents/${PL}.plist"            2>/dev/null || true
-            sudo launchctl load -w "${SL}/LaunchDaemons/${PL}.Root.plist" 2>/dev/null || true
+            launchctl load -w "${SL}/LaunchAgents/${PL}.plist" 2>/dev/null || true
+            [ "'"$CAN_SUDO"'" = 1 ] && sudo launchctl load -w "${SL}/LaunchDaemons/${PL}.Root.plist" 2>/dev/null || true
         ' EXIT
     fi
-    # Main instance
-    afl-fuzz -M main -i "$CORPUS" -o "$OUTPUT" -- "$BINARY" &
-    # Secondary instances
-    for i in $(seq 1 $(( {{WORKERS}} - 1 ))); do
-        afl-fuzz -S "secondary${i}" -i "$CORPUS" -o "$OUTPUT" -- "$BINARY" &
+
+    # ── Run targets, up to JOBS at a time ─────────────────────────────────────
+    _run_one() {
+        local t="$1"
+        local BINARY="fuzz/target/release/$t"
+        local CORPUS="corpus/libfuzz/$t"   # seed from libFuzzer corpus
+        local OUTPUT="afl-output/$t"
+        mkdir -p "$CORPUS" "$OUTPUT"
+        if [ ! -f "$BINARY" ]; then
+            echo "Binary not found — building $t first…"
+            just afl-build-target "$t"
+        fi
+        timeout {{TIME}} afl-fuzz -i "$CORPUS" -o "$OUTPUT" -- "$BINARY" || true
+    }
+    echo "Targets: ${#TARGETS[@]}  |  max parallel: {{JOBS}}  |  time per target: {{TIME}}s"
+    for t in "${TARGETS[@]}"; do
+        # Wait for a free slot (block until running jobs < JOBS)
+        while [ "$(jobs -rp | wc -l | tr -d ' ')" -ge "{{JOBS}}" ]; do
+            wait -n 2>/dev/null || sleep 0.5
+        done
+        echo "=== launching afl++ $t ({{TIME}}s) ==="
+        _run_one "$t" &
     done
-    sleep {{TIME}}
-    kill $(jobs -p) 2>/dev/null || true
+    # Drain the remaining running targets
     wait 2>/dev/null || true
     just afl-corpus-sync
 
