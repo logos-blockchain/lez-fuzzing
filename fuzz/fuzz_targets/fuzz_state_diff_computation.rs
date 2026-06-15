@@ -19,7 +19,7 @@
 //! specific account shapes such as zero balance or `u128::MAX` — are reachable.
 
 use arbitrary::{Arbitrary, Unstructured};
-use common::transaction::NSSATransaction;
+use common::transaction::LeeTransaction;
 use fuzz_props::arbitrary_types::ArbPublicTransaction;
 use fuzz_props::generators::arbitrary_fuzz_state;
 use nssa::{V03State, ValidatedStateDiff};
@@ -47,7 +47,7 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
     // Collect the set of accounts the transaction declares it will touch.
     // `affected_public_account_ids()` returns owned data so `pub_tx` remains
     // available for both `from_public_transaction` (borrow) and the later move
-    // into `NSSATransaction::Public`.
+    // into `LeeTransaction::Public`.
     let affected = pub_tx.affected_public_account_ids();
 
     match ValidatedStateDiff::from_public_transaction(&pub_tx, &state, 1, 0) {
@@ -77,7 +77,7 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
             // we do not panic on a structurally malformed transaction.
             let mut exec_state = state.clone();
             // `pub_tx` is moved here; it is no longer borrowed after this point.
-            let tx_for_exec = NSSATransaction::Public(pub_tx);
+            let tx_for_exec = LeeTransaction::Public(pub_tx);
             if let Ok(checked_tx) = tx_for_exec.transaction_stateless_check() {
                 if checked_tx.execute_check_on_state(&mut exec_state, 1, 0).is_ok() {
                     for acc_id in &affected {

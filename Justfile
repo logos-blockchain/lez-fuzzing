@@ -39,11 +39,65 @@ fuzz TIME="30":
         cargo fuzz run "$target" "corpus/libfuzz/$target" -- -max_total_time={{TIME}}
     done
 
-# Re-run the saved corpus for every target (regression mode, no new mutations)
-fuzz-regression:
+# Run ALL fuzz targets with a bounded job pool for TIME seconds each (default: 30).
+# At most JOBS targets run simultaneously (default: 4); as soon as one finishes
+# the next queued target is launched, so the pool stays full until all targets
+# have been processed.
+# Targets are discovered automatically from fuzz/Cargo.toml — no edit needed
+# here when a new [[bin]] entry is added.
+#
+# Usage: just fuzz-parallel              # all targets, 30 s each, 4 in parallel
+#        just fuzz-parallel 120          # all targets, 120 s each, 4 in parallel
+#        just fuzz-parallel 120 8        # all targets, 120 s each, 8 in parallel
+fuzz-parallel TIME="30" JOBS="4":
     #!/bin/bash
     set -euo pipefail
-    for target in $(cargo fuzz list 2>/dev/null); do
+    TARGETS=($(cargo fuzz list 2>/dev/null))
+    total=${#TARGETS[@]}
+    echo "Targets: $total  |  max parallel: {{JOBS}}  |  time per target: {{TIME}}s"
+    echo ""
+    PIDS=()
+    failed=0
+
+    for target in "${TARGETS[@]}"; do
+        # Wait for a free slot (block until running jobs < JOBS)
+        while [ "$(jobs -rp | wc -l | tr -d ' ')" -ge "{{JOBS}}" ]; do
+            # bash 4.3+: wait -n returns when any single child exits
+            wait -n 2>/dev/null || sleep 0.5
+        done
+        echo "=== launching $target ({{TIME}}s) ==="
+        mkdir -p "corpus/libfuzz/$target"
+        cargo fuzz run "$target" "corpus/libfuzz/$target" -- -max_total_time={{TIME}} &
+        PIDS+=($!)
+    done
+
+    # Drain the remaining running targets
+    for pid in "${PIDS[@]}"; do
+        wait "$pid" || { echo "WARNING: PID $pid exited with non-zero status"; failed=$((failed + 1)); }
+    done
+
+    echo ""
+    if [ "$failed" -eq 0 ]; then
+        echo "✓ All $total target(s) finished successfully."
+    else
+        echo "WARNING: $failed of $total target(s) reported errors."
+        exit 1
+    fi
+
+# Re-run the saved corpus for one or ALL targets (regression mode, no new mutations).
+# When TARGET is omitted every registered target is replayed in sequence.
+# Usage: just fuzz-regression                        # all targets
+#        just fuzz-regression fuzz_state_transition  # single target
+fuzz-regression TARGET="":
+    #!/bin/bash
+    set -euo pipefail
+    TARGET="{{TARGET}}"
+    if [ -z "$TARGET" ]; then
+        TARGETS=($(cargo fuzz list 2>/dev/null))
+    else
+        TARGETS=("$TARGET")
+    fi
+    for target in "${TARGETS[@]}"; do
         echo "=== regression $target ==="
         mkdir -p "corpus/libfuzz/$target"
         cargo fuzz run "$target" "corpus/libfuzz/$target" -- -runs=0
@@ -295,45 +349,96 @@ fuzz-afl TARGET="" TIME="30":
         echo "  Format for a report: just afl-fmt <crash-file>"
     fi
 
-# Run AFL++ with N parallel instances (1 main + N-1 secondary) for TIME seconds.
-# Requires that afl-fuzz is on PATH; all instances share afl-output/{{TARGET}}/.
-# On macOS the crash reporter is disabled automatically for the duration of the
-# run and re-enabled when the script exits.
+# Run AFL++ over all targets, up to JOBS targets at a time (one instance each),
+# for TIME seconds per target. As soon as one target finishes the next queued
+# target is launched, so the pool stays full until every target is done.
+# Requires that afl-fuzz is on PATH.
+# On macOS this needs the System V shared-memory limits raised and the crash
+# reporter disabled (both require admin). If the current user can use sudo the
+# recipe does it automatically; otherwise it asks an administrator to run
+# `sudo afl-system-config` once (sets the shm limits and disables the reporter —
+# both persist until reboot) and exits.
 #
-# Usage: just fuzz-afl-parallel fuzz_state_transition
-#        just fuzz-afl-parallel fuzz_state_transition 8 600
-fuzz-afl-parallel TARGET WORKERS="4" TIME="300":
+# Usage: just fuzz-afl-parallel              # all targets, 30 s each, 4 at a time
+#        just fuzz-afl-parallel 600          # all targets, 600 s each, 4 at a time
+#        just fuzz-afl-parallel 600 8        # all targets, 600 s each, 8 at a time
+fuzz-afl-parallel TIME="30" JOBS="4":
     #!/bin/bash
     set -euo pipefail
-    BINARY="fuzz/target/release/{{TARGET}}"
-    CORPUS="corpus/libfuzz/{{TARGET}}"   # seed from libFuzzer corpus
-    OUTPUT="afl-output/{{TARGET}}"
-    mkdir -p "$CORPUS" "$OUTPUT"
-    if [ ! -f "$BINARY" ]; then
-        echo "Binary not found — building first…"
-        just afl-build-target {{TARGET}}
-    fi
-    # ── macOS: disable crash reporter for the duration of this run ───────────
+
+    # ── Collect targets to run ────────────────────────────────────────────────
+    TARGETS=($(cargo fuzz list 2>/dev/null))
+
+    # ── macOS: shared-memory limits + crash reporter (both need admin) ────────
     if [ "$(uname)" = "Darwin" ]; then
         SL=/System/Library; PL=com.apple.ReportCrash
+        # Can this user run privileged commands without prompting for a password?
+        if sudo -n true 2>/dev/null; then CAN_SUDO=1; else CAN_SUDO=0; fi
+
+        # The default kern.sysv.shmmax (4 MB) is too small for AFL++'s shm
+        # segments, so shmget() fails with EINVAL under parallel fuzzing.
+        NEED_SHMMAX=524288000
+        CUR_SHMMAX=$(sysctl -n kern.sysv.shmmax 2>/dev/null || echo 0)
+        if [ "$CUR_SHMMAX" -lt "$NEED_SHMMAX" ]; then
+            if [ "$CAN_SUDO" = 1 ]; then
+                echo "macOS: raising shared-memory limits for parallel AFL++ instances…"
+                sudo sysctl kern.sysv.shmmax=524288000 kern.sysv.shmmin=1 \
+                            kern.sysv.shmseg=48 kern.sysv.shmall=131072000 \
+                            kern.sysv.shmmni=1024 >/dev/null || true
+            else
+                echo "ERROR: System V shared-memory limits are too low for parallel AFL++"
+                echo "       (kern.sysv.shmmax=$CUR_SHMMAX, need >= $NEED_SHMMAX) and this"
+                echo "       user cannot use sudo."
+                echo ""
+                echo "       Ask an administrator to run this once (persists until reboot):"
+                echo ""
+                echo "         sudo afl-system-config"
+                echo ""
+                echo "       It raises the shm limits and disables the crash reporter."
+                echo "       Then re-run: just fuzz-afl-parallel {{TIME}} {{JOBS}}"
+                exit 1
+            fi
+        fi
+
+        # Disable the crash reporter for the duration of the run. The per-user
+        # agent needs no privileges; the system daemon does, so only attempt it
+        # when we can sudo (an admin's `afl-system-config` covers it otherwise).
         echo "macOS: disabling crash reporter (AFL++ requirement)…"
-        launchctl unload -w "${SL}/LaunchAgents/${PL}.plist"            2>/dev/null || true
-        sudo launchctl unload -w "${SL}/LaunchDaemons/${PL}.Root.plist" 2>/dev/null || true
+        launchctl unload -w "${SL}/LaunchAgents/${PL}.plist" 2>/dev/null || true
+        if [ "$CAN_SUDO" = 1 ]; then
+            sudo launchctl unload -w "${SL}/LaunchDaemons/${PL}.Root.plist" 2>/dev/null || true
+        fi
         trap '
             echo "Re-enabling macOS crash reporter…"
             SL=/System/Library; PL=com.apple.ReportCrash
-            launchctl load -w "${SL}/LaunchAgents/${PL}.plist"            2>/dev/null || true
-            sudo launchctl load -w "${SL}/LaunchDaemons/${PL}.Root.plist" 2>/dev/null || true
+            launchctl load -w "${SL}/LaunchAgents/${PL}.plist" 2>/dev/null || true
+            [ "'"$CAN_SUDO"'" = 1 ] && sudo launchctl load -w "${SL}/LaunchDaemons/${PL}.Root.plist" 2>/dev/null || true
         ' EXIT
     fi
-    # Main instance
-    afl-fuzz -M main -i "$CORPUS" -o "$OUTPUT" -- "$BINARY" &
-    # Secondary instances
-    for i in $(seq 1 $(( {{WORKERS}} - 1 ))); do
-        afl-fuzz -S "secondary${i}" -i "$CORPUS" -o "$OUTPUT" -- "$BINARY" &
+
+    # ── Run targets, up to JOBS at a time ─────────────────────────────────────
+    _run_one() {
+        local t="$1"
+        local BINARY="fuzz/target/release/$t"
+        local CORPUS="corpus/libfuzz/$t"   # seed from libFuzzer corpus
+        local OUTPUT="afl-output/$t"
+        mkdir -p "$CORPUS" "$OUTPUT"
+        if [ ! -f "$BINARY" ]; then
+            echo "Binary not found — building $t first…"
+            just afl-build-target "$t"
+        fi
+        timeout {{TIME}} afl-fuzz -i "$CORPUS" -o "$OUTPUT" -- "$BINARY" || true
+    }
+    echo "Targets: ${#TARGETS[@]}  |  max parallel: {{JOBS}}  |  time per target: {{TIME}}s"
+    for t in "${TARGETS[@]}"; do
+        # Wait for a free slot (block until running jobs < JOBS)
+        while [ "$(jobs -rp | wc -l | tr -d ' ')" -ge "{{JOBS}}" ]; do
+            wait -n 2>/dev/null || sleep 0.5
+        done
+        echo "=== launching afl++ $t ({{TIME}}s) ==="
+        _run_one "$t" &
     done
-    sleep {{TIME}}
-    kill $(jobs -p) 2>/dev/null || true
+    # Drain the remaining running targets
     wait 2>/dev/null || true
     just afl-corpus-sync
 
@@ -643,12 +748,158 @@ coverage-all ENGINE="all":
         fi
     fi
 
+# ── Mutation testing ──────────────────────────────────────────────────────────
+#
+# Prerequisites (install once):
+#   cargo install cargo-mutants
+#
+# Two planes — run them independently:
+#
+#   Plane A  (fast, ~1-5 min):  mutates fuzz_props invariant logic.
+#            Oracle: cargo test -p fuzz_props --release
+#            Run on every PR that touches fuzz_props/ or fuzz/fuzz_targets/.
+#
+#   Plane B  (slow, ~hours):    mutates LEZ protocol code (lee, common).
+#            Oracle: all 15 fuzz targets replayed against their committed corpus.
+#            Run weekly or manually to find corpus gaps.
+
+# Plane A — mutation testing of fuzz_props invariant implementations.
+#
+# Mutates every function in fuzz_props and checks whether `cargo test -p fuzz_props
+# --release` catches the mutation.  Surviving mutants identify invariant-checker
+# logic that the property tests do not fully exercise.
+#
+# Workspace metadata in Cargo.toml configures --release, exclude_globs, and
+# timeout_multiplier automatically.
+#
+# --in-place is mandatory: fuzz_props depends on LEZ crates via relative path
+# (../logos-execution-zone/...) — without it cargo-mutants copies the workspace
+# to /tmp and the copy cannot resolve those relative paths.
+#
+# Output: mutants-harness.out/  (human-readable report also printed to stdout)
+mutants-harness:
+    cargo mutants --package fuzz_props --in-place --output mutants-harness.out
+
+# Plane B — mutation testing of the LEZ protocol code against the committed corpus.
+#
+# Mutates lee and common in the logos-execution-zone sibling workspace and uses
+# scripts/mutants-corpus-test.sh as the oracle.  The oracle replays all 15
+# committed libFuzzer corpora (cargo fuzz run -runs=0) against each mutant.
+#
+# A mutant that SURVIVES means there is no corpus input that triggers the
+# relevant protocol invariant at that mutation point — a corpus gap worth
+# investigating with a longer fuzz run.
+#
+# Prerequisites:
+#   - logos-execution-zone cloned at ../logos-execution-zone
+#   - cargo-fuzz installed (cargo install cargo-fuzz)
+#   - cargo-mutants installed (cargo install cargo-mutants --locked)
+#
+# PACKAGES selects which LEZ crates to mutate (space-separated).
+# Default covers the two highest-value protocol crates.
+#
+# Output report: mutants-protocol.out/ in the repository root.
+mutants-protocol PACKAGES="lee common":
+    #!/bin/bash
+    set -euo pipefail
+    REPO_DIR="$(pwd)"
+
+    if [ ! -d "${REPO_DIR}/../logos-execution-zone" ]; then
+        echo "ERROR: logos-execution-zone not found at ../logos-execution-zone"
+        exit 1
+    fi
+    LEZ_DIR="$(cd "${REPO_DIR}/../logos-execution-zone" && pwd)"
+
+    # Build --package flags (one per crate name)
+    PKG_FLAGS=()
+    for pkg in {{PACKAGES}}; do
+        PKG_FLAGS+=(--package "$pkg")
+    done
+
+    echo "=== Plane B: mutating [{{PACKAGES}}] in logos-execution-zone ==="
+    echo "    Oracle: scripts/mutants-corpus-test.sh (corpus regression, -runs=0)"
+    echo "    Report: ${REPO_DIR}/mutants-protocol.out/"
+    echo ""
+
+    # cargo-mutants must be run from inside the target workspace.
+    # FUZZ_REPO tells the oracle script where to find the corpus and fuzz/ dir.
+    # --output puts the report in our repo root so it's easy to browse/commit.
+    # --in-place is required because LEZ depends on path crates outside its own
+    # directory (e.g. the Rust standard toolchain); without it cargo-mutants copies
+    # the workspace to a temp dir where those relative paths would not resolve.
+    #
+    # cargo-mutants >=24 dropped --test-command and only supports --test-tool cargo|nextest.
+    # Work around: create a fake `cargo` wrapper that intercepts `cargo test` and
+    # runs the corpus oracle instead; every other sub-command is delegated to the
+    # real cargo.  We call the cargo-mutants binary directly so that cargo's own
+    # process launch doesn't override the CARGO env var back to the real binary.
+    REAL_CARGO="$(command -v cargo)"
+    FAKE_CARGO=$(mktemp /tmp/fake-cargo-XXXXXX)
+    FAKE_CARGO_LOG=$(mktemp /tmp/fake-cargo-log-XXXXXX.txt)
+    trap 'rm -f "$FAKE_CARGO" "$FAKE_CARGO_LOG"' EXIT
+    # The fake cargo intercepts the test *execution* phase only.
+    # cargo-mutants drives two kinds of "cargo test" invocations:
+    #   Build phase: cargo test --no-run --verbose --package=...   (compile only)
+    #   Test phase:  cargo test --verbose --package=...            (run tests)
+    # The oracle must only replace the test execution phase; the build phase
+    # must be forwarded to the real cargo so mutants are actually compiled.
+    printf '#!/bin/bash\necho "FAKE_CARGO: $*" >> "%s"\n_has_no_run=false\nfor _a in "$@"; do [ "$_a" = "--no-run" ] && _has_no_run=true && break; done\nif [ "${1:-}" = "test" ] && [ "$_has_no_run" = "false" ]; then\n    FUZZ_REPO="%s" exec "%s"\nelse\n    exec "%s" "$@"\nfi\n' \
+        "$FAKE_CARGO_LOG" \
+        "$REPO_DIR" \
+        "${REPO_DIR}/scripts/mutants-corpus-test.sh" \
+        "$REAL_CARGO" > "$FAKE_CARGO"
+    chmod +x "$FAKE_CARGO"
+
+    # Locate the cargo-mutants binary (installed by `cargo install cargo-mutants`).
+    MUTANTS_BIN="$(command -v cargo-mutants 2>/dev/null || true)"
+    if [ -z "$MUTANTS_BIN" ]; then
+        MUTANTS_BIN="$(dirname "$REAL_CARGO")/cargo-mutants"
+    fi
+    if [ ! -x "$MUTANTS_BIN" ]; then
+        echo "ERROR: cargo-mutants not found. Install with: cargo install cargo-mutants --locked"
+        exit 1
+    fi
+
+    # cargo-mutants is a Cargo plugin.  When invoked via `cargo mutants`, Cargo
+    # automatically prepends "mutants" as argv[1].  When we invoke the binary
+    # directly (to keep our CARGO env override alive), we must supply it ourselves.
+    cd "$LEZ_DIR"
+    CARGO="$FAKE_CARGO" \
+        "$MUTANTS_BIN" mutants \
+            "${PKG_FLAGS[@]}" \
+            --in-place \
+            --output "${REPO_DIR}/mutants-protocol.out" \
+            --timeout-multiplier 5.0 \
+        || { echo "--- fake-cargo invocations ---"; cat "$FAKE_CARGO_LOG"; exit 1; }
+
+    echo ""
+    echo "=== Mutation report summary ==="
+    MISSED_FILE="${REPO_DIR}/mutants-protocol.out/missed.txt"
+    CAUGHT_FILE="${REPO_DIR}/mutants-protocol.out/caught.txt"
+    MISSED=$(wc -l < "$MISSED_FILE" 2>/dev/null | tr -d ' ' || echo 0)
+    CAUGHT=$(wc -l < "$CAUGHT_FILE" 2>/dev/null | tr -d ' ' || echo 0)
+    echo "Caught: ${CAUGHT}  |  Survived: ${MISSED}"
+    echo ""
+    if [ "${MISSED}" -gt 0 ]; then
+        echo "Surviving mutants (corpus gaps):"
+        cat "$MISSED_FILE" || true
+        echo ""
+        echo "For each surviving mutant: run 'just fuzz <target>' targeting the"
+        echo "mutated function, add the crashing input to corpus/libfuzz/<target>/,"
+        echo "then re-run 'just mutants-protocol' to confirm it is now CAUGHT."
+    else
+        echo "All mutants caught — corpus covers all tested mutation points."
+    fi
+
 # ── Housekeeping ──────────────────────────────────────────────────────────────
 
-# Remove all Cargo build artefacts (workspace + fuzz sub-crate)
+# Remove all Cargo build artefacts (workspace + fuzz sub-crate + logos-execution-zone)
+# Each command is prefixed with `-` so that a missing sibling workspace (LEZ not cloned)
+# does not abort the recipe — cargo clean still removes whatever targets are present.
 clean:
-    cargo clean
-    cargo clean --manifest-path fuzz/Cargo.toml
+    -cargo clean
+    -cargo clean --manifest-path fuzz/Cargo.toml
+    -cargo clean --manifest-path ../logos-execution-zone/Cargo.toml
 
 # Remove libFuzzer crash/timeout artifacts for all targets (corpus is kept)
 clean-artifacts:
