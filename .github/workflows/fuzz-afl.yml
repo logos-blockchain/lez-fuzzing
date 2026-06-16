@@ -13,11 +13,51 @@ env:
 
 jobs:
   # ────────────────────────────────────────────────────────────────────────────
+  # setup — single source of truth for the fuzz target list
+  # ────────────────────────────────────────────────────────────────────────────
+  setup:
+    name: "Resolve fuzz target matrix"
+    runs-on: ubuntu-latest
+    outputs:
+      targets: ${{ steps.list.outputs.targets }}
+    steps:
+      - name: Build target list
+        id: list
+        run: |
+          # Canonical, human-readable list (one target per line) → compact JSON array.
+          targets=$(jq -R -s -c 'split("\n") | map(select(length > 0))' <<'EOF'
+          fuzz_apply_state_diff_split_path
+          fuzz_block_verification
+          fuzz_encoding_roundtrip
+          fuzz_multi_block_state_sequence
+          fuzz_program_deployment_lifecycle
+          fuzz_replay_prevention
+          fuzz_sequencer_vs_replayer
+          fuzz_signature_verification
+          fuzz_state_diff_computation
+          fuzz_state_serialization
+          fuzz_state_transition
+          fuzz_stateless_verification
+          fuzz_transaction_decoding
+          fuzz_validate_execute_consistency
+          fuzz_witness_set_verification
+          fuzz_merkle_tree
+          fuzz_transaction_properties
+          fuzz_privacy_preserving_witness
+          fuzz_encoding_privacy_preserving
+          fuzz_nullifier_set_roundtrip
+          EOF
+          )
+          echo "targets=$targets" >> "$GITHUB_OUTPUT"
+          echo "Resolved ${targets}"
+
+  # ────────────────────────────────────────────────────────────────────────────
   # afl-smoke — 60-second per targets
   # ────────────────────────────────────────────────────────────────────────────
   afl-smoke:
     name: "AFL++ smoke — ${{ matrix.target }}"
     runs-on: ubuntu-latest
+    needs: setup
 
     permissions:
       contents: read
@@ -25,27 +65,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - fuzz_apply_state_diff_split_path
-          - fuzz_block_verification
-          - fuzz_encoding_roundtrip
-          - fuzz_multi_block_state_sequence
-          - fuzz_program_deployment_lifecycle
-          - fuzz_replay_prevention
-          - fuzz_sequencer_vs_replayer
-          - fuzz_signature_verification
-          - fuzz_state_diff_computation
-          - fuzz_state_serialization
-          - fuzz_state_transition
-          - fuzz_stateless_verification
-          - fuzz_transaction_decoding
-          - fuzz_validate_execute_consistency
-          - fuzz_witness_set_verification
-          - fuzz_merkle_tree
-          - fuzz_transaction_properties
-          - fuzz_privacy_preserving_witness
-          - fuzz_encoding_privacy_preserving
-          - fuzz_nullifier_set_roundtrip
+        target: ${{ fromJSON(needs.setup.outputs.targets) }}
 
     steps:
       - name: Checkout repository
@@ -249,7 +269,7 @@ jobs:
   afl-coverage-build:
     name: "AFL++ coverage build — ${{ matrix.target }}"
     runs-on: ubuntu-latest
-    needs: afl-smoke
+    needs: [setup, afl-smoke]
 
     permissions:
       contents: read
@@ -257,27 +277,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - fuzz_apply_state_diff_split_path
-          - fuzz_block_verification
-          - fuzz_encoding_roundtrip
-          - fuzz_multi_block_state_sequence
-          - fuzz_program_deployment_lifecycle
-          - fuzz_replay_prevention
-          - fuzz_sequencer_vs_replayer
-          - fuzz_signature_verification
-          - fuzz_state_diff_computation
-          - fuzz_state_serialization
-          - fuzz_state_transition
-          - fuzz_stateless_verification
-          - fuzz_transaction_decoding
-          - fuzz_validate_execute_consistency
-          - fuzz_witness_set_verification
-          - fuzz_merkle_tree
-          - fuzz_transaction_properties
-          - fuzz_privacy_preserving_witness
-          - fuzz_encoding_privacy_preserving
-          - fuzz_nullifier_set_roundtrip
+        target: ${{ fromJSON(needs.setup.outputs.targets) }}
 
     steps:
       - name: Checkout repository
@@ -313,7 +313,6 @@ jobs:
       - name: Build fuzz target with LLVM coverage instrumentation
         env:
           RUSTFLAGS: "-C instrument-coverage"
-          RISC0_DEV_MODE: "1"
         run: |
           cargo build \
             --manifest-path fuzz/Cargo.toml \
@@ -403,6 +402,16 @@ jobs:
         with:
           components: llvm-tools-preview
 
+      - name: Locate LLVM tools
+        run: |
+          # Resolve the llvm-tools-preview binary paths once; downstream steps read
+          # $LLVM_PROFDATA / $LLVM_COV from the environment.
+          SYSROOT="$(rustc --print sysroot)"
+          HOST_TRIPLE="$(rustc -vV | awk '/^host:/{print $2}')"
+          LLVM_BIN="${SYSROOT}/lib/rustlib/${HOST_TRIPLE}/bin"
+          echo "LLVM_PROFDATA=${LLVM_BIN}/llvm-profdata" >> "$GITHUB_ENV"
+          echo "LLVM_COV=${LLVM_BIN}/llvm-cov" >> "$GITHUB_ENV"
+
       - name: Download all per-target coverage data
         uses: actions/download-artifact@v4
         with:
@@ -413,9 +422,6 @@ jobs:
       - name: Merge all per-target profdata into one combined profdata
         run: |
           PROFDATA="coverage/afl/aggregated/merged.profdata"
-          SYSROOT="$(rustc --print sysroot)"
-          HOST_TRIPLE="$(rustc -vV | awk '/^host:/{print $2}')"
-          LLVM_PROFDATA="${SYSROOT}/lib/rustlib/${HOST_TRIPLE}/bin/llvm-profdata"
           shopt -s nullglob
           files=(cov-in/*/*.profdata)
           if [ ${#files[@]} -eq 0 ]; then
@@ -430,9 +436,6 @@ jobs:
         run: |
           PROFDATA="coverage/afl/aggregated/merged.profdata"
           HTML_DIR="coverage/afl/aggregated/html"
-          SYSROOT="$(rustc --print sysroot)"
-          HOST_TRIPLE="$(rustc -vV | awk '/^host:/{print $2}')"
-          LLVM_COV="${SYSROOT}/lib/rustlib/${HOST_TRIPLE}/bin/llvm-cov"
           if [ ! -f "$PROFDATA" ]; then
             echo "No profdata — skipping HTML report."
             exit 0
