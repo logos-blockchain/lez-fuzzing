@@ -5,7 +5,7 @@ on:
     - cron: "0 2 * * *"
   workflow_dispatch:
   push:
-    branches: [main, feat-afl-fuzzing]
+    branches: [main, chore-corpus-update]
 
 env:
   RISC0_DEV_MODE: "1"
@@ -244,12 +244,144 @@ jobs:
           if-no-files-found: ignore
 
   # ────────────────────────────────────────────────────────────────────────────
-  # afl-coverage-aggregate — single HTML report merging all 20 targets
+  # afl-coverage-build — per-target instrumented build + corpus replay (matrix)
+  # ────────────────────────────────────────────────────────────────────────────
+  afl-coverage-build:
+    name: "AFL++ coverage build — ${{ matrix.target }}"
+    runs-on: ubuntu-latest
+    needs: afl-smoke
+
+    permissions:
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - fuzz_apply_state_diff_split_path
+          - fuzz_block_verification
+          - fuzz_encoding_roundtrip
+          - fuzz_multi_block_state_sequence
+          - fuzz_program_deployment_lifecycle
+          - fuzz_replay_prevention
+          - fuzz_sequencer_vs_replayer
+          - fuzz_signature_verification
+          - fuzz_state_diff_computation
+          - fuzz_state_serialization
+          - fuzz_state_transition
+          - fuzz_stateless_verification
+          - fuzz_transaction_decoding
+          - fuzz_validate_execute_consistency
+          - fuzz_witness_set_verification
+          - fuzz_merkle_tree
+          - fuzz_transaction_properties
+          - fuzz_privacy_preserving_witness
+          - fuzz_encoding_privacy_preserving
+          - fuzz_nullifier_set_roundtrip
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Checkout logos-execution-zone
+        uses: ./.github/actions/checkout-lez
+
+      - name: Install logos-blockchain-circuits
+        uses: ./logos-execution-zone/.github/actions/install-logos-blockchain-circuits
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Rust nightly + llvm-tools-preview
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: llvm-tools-preview
+
+      - name: Download AFL smoke findings for this target
+        uses: actions/download-artifact@v4
+        with:
+          name: afl-findings-${{ matrix.target }}
+          path: afl-artifacts/
+        continue-on-error: true   # no crashes/hangs/queue is fine
+
+      - name: Extract AFL findings tarball
+        run: |
+          for tarball in afl-artifacts/afl-findings-*.tar.gz; do
+            [ -f "$tarball" ] || continue
+            tar -xzf "$tarball"
+          done
+
+      - name: Build fuzz target with LLVM coverage instrumentation
+        env:
+          RUSTFLAGS: "-C instrument-coverage"
+          RISC0_DEV_MODE: "1"
+        run: |
+          cargo build \
+            --manifest-path fuzz/Cargo.toml \
+            --no-default-features \
+            --features fuzzer-libfuzzer \
+            --release \
+            --bin ${{ matrix.target }}
+
+      - name: Replay corpus and queue entries through the instrumented binary
+        run: |
+          TARGET="${{ matrix.target }}"
+          BINARY="fuzz/target/release/${TARGET}"
+          PROFRAW_DIR="cov-work/profraw"
+          mkdir -p "$PROFRAW_DIR"
+          idx=0
+          run_input() {
+            LLVM_PROFILE_FILE="${PROFRAW_DIR}/${TARGET}_${idx}.profraw" \
+              "$BINARY" "$1" 2>/dev/null || true
+            idx=$((idx + 1))
+          }
+          # Checked-in libFuzzer corpus
+          for f in corpus/libfuzz/${TARGET}/*; do [ -f "$f" ] && run_input "$f"; done
+          # Checked-in AFL corpus
+          for f in corpus/afl/${TARGET}/*; do [ -f "$f" ] && run_input "$f"; done
+          # AFL++ queue entries from today's smoke run
+          for instance_dir in afl-output/${TARGET}/*/; do
+            QUEUE="${instance_dir}queue"
+            [ -d "$QUEUE" ] || continue
+            for f in "$QUEUE"/id:*; do [ -f "$f" ] && run_input "$f"; done
+          done
+          echo "Inputs processed for ${TARGET}: ${idx}"
+
+      - name: Merge profraw into a per-target profdata and stage the binary
+        run: |
+          TARGET="${{ matrix.target }}"
+          BINARY="fuzz/target/release/${TARGET}"
+          PROFRAW_DIR="cov-work/profraw"
+          SYSROOT="$(rustc --print sysroot)"
+          HOST_TRIPLE="$(rustc -vV | awk '/^host:/{print $2}')"
+          LLVM_PROFDATA="${SYSROOT}/lib/rustlib/${HOST_TRIPLE}/bin/llvm-profdata"
+          OUT="cov-out/${TARGET}"
+          mkdir -p "$OUT"
+          shopt -s nullglob
+          files=("${PROFRAW_DIR}"/*.profraw)
+          if [ ${#files[@]} -gt 0 ]; then
+            "$LLVM_PROFDATA" merge -sparse "${files[@]}" -o "${OUT}/${TARGET}.profdata"
+            echo "Merged ${#files[@]} profraw files → ${OUT}/${TARGET}.profdata"
+          else
+            echo "No .profraw produced for ${TARGET} — staging binary only."
+          fi
+          # Stage the instrumented binary (named after the target, no extension)
+          # next to its profdata so the aggregate job needs no rebuild.
+          cp "$BINARY" "${OUT}/${TARGET}"
+
+      - name: Upload per-target coverage data
+        uses: actions/upload-artifact@v4
+        with:
+          name: afl-cov-data-${{ matrix.target }}
+          path: cov-out/${{ matrix.target }}/
+          if-no-files-found: warn
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # afl-coverage-aggregate — merge all per-target profdata into one HTML report
   # ────────────────────────────────────────────────────────────────────────────
   afl-coverage-aggregate:
     name: "AFL++ coverage — aggregated"
     runs-on: ubuntu-latest
-    needs: afl-smoke
+    needs: afl-coverage-build
 
     permissions:
       contents: read
@@ -271,130 +403,28 @@ jobs:
         with:
           components: llvm-tools-preview
 
-      - name: Download all AFL smoke findings
+      - name: Download all per-target coverage data
         uses: actions/download-artifact@v4
         with:
-          pattern: afl-findings-*
-          path: afl-artifacts/
+          pattern: afl-cov-data-*
+          path: cov-in/
           merge-multiple: false
-        continue-on-error: true   # no crashes/hangs/queue is fine
 
-      - name: Extract all AFL findings tarballs
+      - name: Merge all per-target profdata into one combined profdata
         run: |
-          for tarball in afl-artifacts/*/afl-findings-*.tar.gz; do
-            [ -f "$tarball" ] || continue
-            tar -xzf "$tarball"
-          done
-
-      - name: Build all fuzz targets with LLVM coverage instrumentation
-        env:
-          RUSTFLAGS: "-C instrument-coverage"
-          RISC0_DEV_MODE: "1"
-        run: |
-          TARGETS=(
-            fuzz_apply_state_diff_split_path
-            fuzz_block_verification
-            fuzz_encoding_roundtrip
-            fuzz_multi_block_state_sequence
-            fuzz_program_deployment_lifecycle
-            fuzz_replay_prevention
-            fuzz_sequencer_vs_replayer
-            fuzz_signature_verification
-            fuzz_state_diff_computation
-            fuzz_state_serialization
-            fuzz_state_transition
-            fuzz_stateless_verification
-            fuzz_transaction_decoding
-            fuzz_validate_execute_consistency
-            fuzz_witness_set_verification
-            fuzz_merkle_tree
-            fuzz_transaction_properties
-            fuzz_privacy_preserving_witness
-            fuzz_encoding_privacy_preserving
-            fuzz_nullifier_set_roundtrip
-          )
-          for TARGET in "${TARGETS[@]}"; do
-            cargo build \
-              --manifest-path fuzz/Cargo.toml \
-              --no-default-features \
-              --features fuzzer-libfuzzer \
-              --release \
-              --bin "$TARGET"
-          done
-
-      - name: Run all corpus and queue entries through instrumented binaries
-        run: |
-          TARGETS=(
-            fuzz_apply_state_diff_split_path
-            fuzz_block_verification
-            fuzz_encoding_roundtrip
-            fuzz_multi_block_state_sequence
-            fuzz_program_deployment_lifecycle
-            fuzz_replay_prevention
-            fuzz_sequencer_vs_replayer
-            fuzz_signature_verification
-            fuzz_state_diff_computation
-            fuzz_state_serialization
-            fuzz_state_transition
-            fuzz_stateless_verification
-            fuzz_transaction_decoding
-            fuzz_validate_execute_consistency
-            fuzz_witness_set_verification
-            fuzz_merkle_tree
-            fuzz_transaction_properties
-            fuzz_privacy_preserving_witness
-            fuzz_encoding_privacy_preserving
-            fuzz_nullifier_set_roundtrip
-          )
-          PROFRAW_DIR="coverage/afl/aggregated/profraw"
-          mkdir -p "$PROFRAW_DIR"
-          idx=0
-          for TARGET in "${TARGETS[@]}"; do
-            BINARY="fuzz/target/release/${TARGET}"
-            # Checked-in libFuzzer corpus
-            for f in corpus/libfuzz/${TARGET}/*; do
-              [ -f "$f" ] || continue
-              LLVM_PROFILE_FILE="${PROFRAW_DIR}/${TARGET}_${idx}.profraw" \
-                "$BINARY" "$f" 2>/dev/null || true
-              idx=$((idx + 1))
-            done
-            # Checked-in AFL corpus
-            for f in corpus/afl/${TARGET}/*; do
-              [ -f "$f" ] || continue
-              LLVM_PROFILE_FILE="${PROFRAW_DIR}/${TARGET}_${idx}.profraw" \
-                "$BINARY" "$f" 2>/dev/null || true
-              idx=$((idx + 1))
-            done
-            # AFL++ queue entries from today's smoke run
-            for instance_dir in afl-output/${TARGET}/*/; do
-              QUEUE="${instance_dir}queue"
-              [ -d "$QUEUE" ] || continue
-              for f in "$QUEUE"/id:*; do
-                [ -f "$f" ] || continue
-                LLVM_PROFILE_FILE="${PROFRAW_DIR}/${TARGET}_${idx}.profraw" \
-                  "$BINARY" "$f" 2>/dev/null || true
-                idx=$((idx + 1))
-              done
-            done
-          done
-          echo "Total inputs processed across all targets: ${idx}"
-
-      - name: Merge all profiles into one combined profdata
-        run: |
-          PROFRAW_DIR="coverage/afl/aggregated/profraw"
           PROFDATA="coverage/afl/aggregated/merged.profdata"
           SYSROOT="$(rustc --print sysroot)"
           HOST_TRIPLE="$(rustc -vV | awk '/^host:/{print $2}')"
           LLVM_PROFDATA="${SYSROOT}/lib/rustlib/${HOST_TRIPLE}/bin/llvm-profdata"
           shopt -s nullglob
-          files=("${PROFRAW_DIR}"/*.profraw)
+          files=(cov-in/*/*.profdata)
           if [ ${#files[@]} -eq 0 ]; then
-            echo "No .profraw files found — nothing to aggregate."
+            echo "No per-target profdata found — nothing to aggregate."
             exit 0
           fi
           mkdir -p "$(dirname "$PROFDATA")"
           "$LLVM_PROFDATA" merge -sparse "${files[@]}" -o "$PROFDATA"
-          echo "Merged ${#files[@]} profraw files → $PROFDATA"
+          echo "Merged ${#files[@]} per-target profdata files → $PROFDATA"
 
       - name: Generate aggregated HTML coverage report
         run: |
@@ -408,40 +438,23 @@ jobs:
             exit 0
           fi
           mkdir -p "$HTML_DIR"
-          TARGETS=(
-            fuzz_apply_state_diff_split_path
-            fuzz_block_verification
-            fuzz_encoding_roundtrip
-            fuzz_multi_block_state_sequence
-            fuzz_program_deployment_lifecycle
-            fuzz_replay_prevention
-            fuzz_sequencer_vs_replayer
-            fuzz_signature_verification
-            fuzz_state_diff_computation
-            fuzz_state_serialization
-            fuzz_state_transition
-            fuzz_stateless_verification
-            fuzz_transaction_decoding
-            fuzz_validate_execute_consistency
-            fuzz_witness_set_verification
-            fuzz_merkle_tree
-            fuzz_transaction_properties
-            fuzz_privacy_preserving_witness
-            fuzz_encoding_privacy_preserving
-            fuzz_nullifier_set_roundtrip
-          )
-          # llvm-cov show: first binary is a positional arg; the rest use --object
+          # Each per-target artifact holds the instrumented binary (named after the
+          # target, no extension) alongside <target>.profdata.  Pass every binary to
+          # llvm-cov: the first is positional, the rest use --object.
+          shopt -s nullglob
           first=1
           OBJECT_FLAGS=()
-          for TARGET in "${TARGETS[@]}"; do
-            BINARY="fuzz/target/release/${TARGET}"
-            [ -f "$BINARY" ] || continue
-            if [ $first -eq 1 ]; then
-              OBJECT_FLAGS+=("$BINARY")
-              first=0
-            else
-              OBJECT_FLAGS+=("--object" "$BINARY")
-            fi
+          for dir in cov-in/*/; do
+            for f in "$dir"*; do
+              [ -f "$f" ] || continue
+              case "$f" in *.profdata) continue ;; esac
+              if [ $first -eq 1 ]; then
+                OBJECT_FLAGS+=("$f")
+                first=0
+              else
+                OBJECT_FLAGS+=("--object" "$f")
+              fi
+            done
           done
           if [ ${#OBJECT_FLAGS[@]} -eq 0 ]; then
             echo "No instrumented binaries found — skipping report."
