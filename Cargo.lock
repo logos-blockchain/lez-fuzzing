@@ -934,6 +934,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "bonsai-sdk"
+version = "1.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a381a5f681e536070483826412fcfcd6f6637921717c6aa0a3759926899ee9c2"
+dependencies = [
+ "duplicate",
+ "maybe-async",
+ "reqwest",
+ "serde",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "borsh"
 version = "1.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1735,6 +1748,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4c3cf4824e2d5f025c7b531afcb2325364084a16806f6d47fbc1f5fbd9960590"
 
 [[package]]
+name = "duplicate"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e92f10a49176cbffacaedabfaa11d51db1ea0f80a83c26e1873b43cd1742c24"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "proc-macro2-diagnostics",
+]
+
+[[package]]
 name = "dyn-clone"
 version = "1.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2227,6 +2251,7 @@ dependencies = [
  "lee",
  "lee_core",
  "proptest",
+ "risc0-zkvm",
  "testnet_initial_state",
 ]
 
@@ -4546,6 +4571,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "maybe-async"
+version = "0.2.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "746873a384ad60adc5db74471dfaba74bd278afbdcfd81db93fafcdfc8b5ca0c"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "memchr"
 version = "2.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5483,6 +5519,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "proc-macro2-diagnostics"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af066a9c399a26e020ada66a034357a868728e72cd426f3adcd35f80d88d88c8"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+ "version_check",
+]
+
+[[package]]
 name = "prometheus-client"
 version = "0.22.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5894,6 +5942,7 @@ checksum = "eddd3ca559203180a307f12d114c268abf583f59b03cb906fd0b3ff8646c1147"
 dependencies = [
  "base64",
  "bytes",
+ "futures-channel",
  "futures-core",
  "futures-util",
  "h2",
@@ -6245,6 +6294,7 @@ dependencies = [
  "addr2line",
  "anyhow",
  "bincode",
+ "bonsai-sdk",
  "borsh",
  "bytemuck",
  "bytes",

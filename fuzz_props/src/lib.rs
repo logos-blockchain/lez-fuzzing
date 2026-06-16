@@ -64,6 +64,7 @@
 pub mod arbitrary_types;
 pub mod generators;
 pub mod invariants;
+pub mod privacy;
 
 /// Generates the fuzzer entry point for whichever engine this crate is
 /// compiled with, selected via Cargo features:

@@ -211,9 +211,11 @@ impl<'a> Arbitrary<'a> for ArbProgramDeploymentTransaction {
 }
 
 // ── LeeTransaction ───────────────────────────────────────────────────────────
-// `PrivacyPreservingTransaction` is intentionally excluded: it embeds a risc0
-// ZK receipt that cannot be generated inside a hot fuzzing loop.  This matches
-// the known limitation documented in `docs/fuzzing.md`.
+// `PrivacyPreservingTransaction` is intentionally excluded *here*: a passing proof
+// binds to the live chain state, so it cannot be produced by a state-independent
+// `Arbitrary` impl.  Privacy-preserving state-transition coverage (Path B) lives in
+// [`crate::privacy`], which synthesises a per-message dev-mode fake receipt against the
+// current state and is driven by the `fuzz_privacy_preserving_state_transition` target.
 
 /// Newtype wrapper providing [`Arbitrary`] for [`LeeTransaction`].
 ///
