@@ -3,7 +3,7 @@
 # <img src="logos.avif" alt="" height="32" valign="middle"> Lez-fuzzing
 
 **Coverage-guided fuzzing & adversarial testing infrastructure for the
-[Logos Execution Zone (LEZ)](https://github.com/) protocol.**
+[Logos Execution Zone (LEZ)](https://github.com/logos-blockchain/logos-execution-zone) protocol.**
 
 [![Rust](https://img.shields.io/badge/rust-nightly-orange?logo=rust)](rust-toolchain.toml)
 [![Fuzzing](https://img.shields.io/badge/libFuzzer%20%C2%B7%20AFL%2B%2B-20%20targets-blue)](#-fuzz-targets)
