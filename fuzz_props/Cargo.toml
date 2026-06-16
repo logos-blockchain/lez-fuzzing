@@ -21,3 +21,4 @@ testnet_initial_state = { workspace = true }
 
 [dev-dependencies]
 proptest = "1.4"
+nssa = { workspace = true, features = ["prove"] }

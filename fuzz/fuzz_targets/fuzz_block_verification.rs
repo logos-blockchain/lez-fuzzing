@@ -33,10 +33,9 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
     let base = wrap.0;
 
     let signing_key = PrivateKey::try_new(DUMMY_KEY_BYTES).expect("constant key is valid");
-    let bedrock = [0u8; 32];
 
     // Compute the canonical hash for the base input.
-    let block = base.clone().into_pending_block(&signing_key, bedrock);
+    let block = base.clone().into_pending_block(&signing_key);
     let hash_base = block.header.hash;
 
     // ── INVARIANT 1: HashableBlockData::from(Block) is lossless ──────────────────
@@ -51,7 +50,7 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
     {
         let roundtrip_hashable = HashableBlockData::from(block);
         let hash_roundtrip = roundtrip_hashable
-            .into_pending_block(&signing_key, bedrock)
+            .into_pending_block(&signing_key)
             .header
             .hash;
         assert_eq!(
@@ -67,7 +66,7 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
     {
         let mut m = base.clone();
         m.block_id = m.block_id.wrapping_add(1);
-        let hash_m = m.into_pending_block(&signing_key, bedrock).header.hash;
+        let hash_m = m.into_pending_block(&signing_key).header.hash;
         assert_ne!(
             hash_base,
             hash_m,
@@ -81,7 +80,7 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
     {
         let mut m = base.clone();
         m.prev_block_hash.0[0] ^= 0xFF;
-        let hash_m = m.into_pending_block(&signing_key, bedrock).header.hash;
+        let hash_m = m.into_pending_block(&signing_key).header.hash;
         assert_ne!(
             hash_base,
             hash_m,
@@ -95,7 +94,7 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
     {
         let mut m = base.clone();
         m.timestamp = m.timestamp.wrapping_add(1);
-        let hash_m = m.into_pending_block(&signing_key, bedrock).header.hash;
+        let hash_m = m.into_pending_block(&signing_key).header.hash;
         assert_ne!(
             hash_base,
             hash_m,
@@ -121,7 +120,7 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
         if first != last {
             let mut reordered = base.clone();
             reordered.transactions.reverse();
-            let hash_reordered = reordered.into_pending_block(&signing_key, bedrock).header.hash;
+            let hash_reordered = reordered.into_pending_block(&signing_key).header.hash;
             assert_ne!(
                 hash_base,
                 hash_reordered,

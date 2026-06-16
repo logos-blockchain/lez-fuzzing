@@ -1,4 +1,4 @@
-use common::transaction::NSSATransaction;
+use common::transaction::LeeTransaction;
 use nssa::V03State;
 use nssa_core::account::Nonce;
 
@@ -185,7 +185,7 @@ impl ProtocolInvariant for FailedTxNonceStability {
 /// # Enforcement
 ///
 /// This invariant **cannot** be enforced through [`InvariantCtx`] because the replay
-/// check requires re-applying the `NSSATransaction` that `execute_check_on_state`
+/// check requires re-applying the `LeeTransaction` that `execute_check_on_state`
 /// consumes and returns on `Ok`.  It is therefore **not registered** in
 /// [`assert_invariants`]; calling `assert_invariants` alone does **not** cover
 /// `ReplayRejection`.
@@ -235,7 +235,7 @@ pub struct NonceIncrementCorrectness;
 ///
 /// # Why a standalone function?
 ///
-/// `execute_check_on_state` consumes the `NSSATransaction` and returns it on `Ok`,
+/// `execute_check_on_state` consumes the `LeeTransaction` and returns it on `Ok`,
 /// so the transaction is not available as a shared reference inside [`InvariantCtx`].
 /// This function accepts ownership of the returned transaction and performs the
 /// replay in-place.
@@ -249,7 +249,7 @@ pub struct NonceIncrementCorrectness;
 /// }
 /// ```
 pub fn assert_replay_rejection(
-    applied_tx: NSSATransaction,
+    applied_tx: LeeTransaction,
     state: &mut V03State,
     next_block_id: u64,
     next_timestamp: u64,
@@ -270,7 +270,7 @@ pub fn assert_replay_rejection(
 /// passing the signer IDs derived from the transaction's witness set, the [`NonceSnapshot`]
 /// captured **before** execution, and the post-execution state.
 ///
-/// For a `NSSATransaction::Public(tx)`, derive signer IDs as:
+/// For a `LeeTransaction::Public(tx)`, derive signer IDs as:
 ///
 /// ```rust,ignore
 /// let signer_ids: Vec<nssa::AccountId> = tx
@@ -281,7 +281,7 @@ pub fn assert_replay_rejection(
 ///     .collect();
 /// ```
 ///
-/// For `NSSATransaction::ProgramDeployment`, there are no signers; pass an empty slice.
+/// For `LeeTransaction::ProgramDeployment`, there are no signers; pass an empty slice.
 ///
 /// # Why a standalone function?
 ///
@@ -377,7 +377,7 @@ pub fn assert_tx_execution_invariants<E>(
     state_after: &mut V03State,
     balances_before: BalanceSnapshot,
     nonces_before: NonceSnapshot,
-    execution_result: Result<NSSATransaction, E>,
+    execution_result: Result<LeeTransaction, E>,
     replay_context: (u64, u64),
 ) {
     let execution_succeeded = execution_result.is_ok();
@@ -400,19 +400,19 @@ pub fn assert_tx_execution_invariants<E>(
     if let Ok(applied_tx) = execution_result {
         // Derive signer IDs from the witness set.  ProgramDeployment has no signers.
         let signer_ids: Vec<nssa::AccountId> = match &applied_tx {
-            NSSATransaction::Public(pt) => pt
+            LeeTransaction::Public(pt) => pt
                 .witness_set()
                 .signatures_and_public_keys()
                 .iter()
                 .map(|(_, pk)| nssa::AccountId::from(pk))
                 .collect(),
-            NSSATransaction::PrivacyPreserving(pt) => pt
+            LeeTransaction::PrivacyPreserving(pt) => pt
                 .witness_set()
                 .signatures_and_public_keys()
                 .iter()
                 .map(|(_, pk)| nssa::AccountId::from(pk))
                 .collect(),
-            NSSATransaction::ProgramDeployment(_) => vec![],
+            LeeTransaction::ProgramDeployment(_) => vec![],
         };
         assert_nonce_increment_correctness(&signer_ids, &nonces_for_nonce_check, state_after);
         let (next_block_id, next_timestamp) = replay_context;

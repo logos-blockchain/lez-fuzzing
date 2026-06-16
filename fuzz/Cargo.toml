@@ -44,11 +44,11 @@ libfuzzer-sys = { version = "0.4", optional = true }
 afl           = { version = "0.15", optional = true }
 arbitrary     = { version = "1", features = ["derive"] }
 borsh         = "1"
-nssa          = { path = "../../logos-execution-zone/nssa" }
-nssa_core     = { path = "../../logos-execution-zone/nssa/core" }
-common        = { path = "../../logos-execution-zone/common" }
+nssa          = { path = "../../logos-execution-zone/lee/state_machine",      package = "lee" }
+nssa_core     = { path = "../../logos-execution-zone/lee/state_machine/core", package = "lee_core" }
+common        = { path = "../../logos-execution-zone/lez/common" }
 fuzz_props    = { path = "../fuzz_props" }
-testnet_initial_state = { path = "../../logos-execution-zone/testnet_initial_state" }
+testnet_initial_state = { path = "../../logos-execution-zone/lez/testnet_initial_state" }
 
 [profile.release]
 debug = true
@@ -117,5 +117,35 @@ bench = false
 [[bin]]
 name = "fuzz_sequencer_vs_replayer"
 path = "fuzz_targets/fuzz_sequencer_vs_replayer.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fuzz_merkle_tree"
+path = "fuzz_targets/fuzz_merkle_tree.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fuzz_transaction_properties"
+path = "fuzz_targets/fuzz_transaction_properties.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fuzz_privacy_preserving_witness"
+path = "fuzz_targets/fuzz_privacy_preserving_witness.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fuzz_encoding_privacy_preserving"
+path = "fuzz_targets/fuzz_encoding_privacy_preserving.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fuzz_nullifier_set_roundtrip"
+path = "fuzz_targets/fuzz_nullifier_set_roundtrip.rs"
 test = false
 bench = false

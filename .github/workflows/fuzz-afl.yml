@@ -41,6 +41,11 @@ jobs:
           - fuzz_transaction_decoding
           - fuzz_validate_execute_consistency
           - fuzz_witness_set_verification
+          - fuzz_merkle_tree
+          - fuzz_transaction_properties
+          - fuzz_privacy_preserving_witness
+          - fuzz_encoding_privacy_preserving
+          - fuzz_nullifier_set_roundtrip
 
     steps:
       - name: Checkout repository
@@ -239,7 +244,7 @@ jobs:
           if-no-files-found: ignore
 
   # ────────────────────────────────────────────────────────────────────────────
-  # afl-coverage-aggregate — single HTML report merging all 15 targets
+  # afl-coverage-aggregate — single HTML report merging all 20 targets
   # ────────────────────────────────────────────────────────────────────────────
   afl-coverage-aggregate:
     name: "AFL++ coverage — aggregated"
@@ -302,6 +307,11 @@ jobs:
             fuzz_transaction_decoding
             fuzz_validate_execute_consistency
             fuzz_witness_set_verification
+            fuzz_merkle_tree
+            fuzz_transaction_properties
+            fuzz_privacy_preserving_witness
+            fuzz_encoding_privacy_preserving
+            fuzz_nullifier_set_roundtrip
           )
           for TARGET in "${TARGETS[@]}"; do
             cargo build \
@@ -330,6 +340,11 @@ jobs:
             fuzz_transaction_decoding
             fuzz_validate_execute_consistency
             fuzz_witness_set_verification
+            fuzz_merkle_tree
+            fuzz_transaction_properties
+            fuzz_privacy_preserving_witness
+            fuzz_encoding_privacy_preserving
+            fuzz_nullifier_set_roundtrip
           )
           PROFRAW_DIR="coverage/afl/aggregated/profraw"
           mkdir -p "$PROFRAW_DIR"
@@ -409,6 +424,11 @@ jobs:
             fuzz_transaction_decoding
             fuzz_validate_execute_consistency
             fuzz_witness_set_verification
+            fuzz_merkle_tree
+            fuzz_transaction_properties
+            fuzz_privacy_preserving_witness
+            fuzz_encoding_privacy_preserving
+            fuzz_nullifier_set_roundtrip
           )
           # llvm-cov show: first binary is a positional arg; the rest use --object
           first=1

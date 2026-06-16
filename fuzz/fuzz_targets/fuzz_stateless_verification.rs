@@ -1,7 +1,7 @@
 #![cfg_attr(feature = "fuzzer-libfuzzer", no_main)]
 
 use arbitrary::Unstructured;
-use common::transaction::NSSATransaction;
+use common::transaction::LeeTransaction;
 use fuzz_props::generators::arbitrary_transaction;
 
 fuzz_props::fuzz_entry!(|data: &[u8]| {
@@ -22,7 +22,7 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
     }
 
     // Path B: raw decode first, then check — must never panic
-    if let Ok(tx) = borsh::from_slice::<NSSATransaction>(data) {
+    if let Ok(tx) = borsh::from_slice::<LeeTransaction>(data) {
         let _ = tx.transaction_stateless_check();
     }
 });

@@ -1,0 +1,236 @@
+name: Mutation Testing
+
+# ── When to run ───────────────────────────────────────────────────────────────
+# Plane A (fuzz_props invariants) runs on every PR that touches harness code.
+# Plane B (LEZ protocol vs corpus) is slow (minutes per mutant × many mutants)
+# so it only runs on a weekly schedule or on manual dispatch.
+on:
+  pull_request:
+    paths:
+      - "fuzz_props/**"
+      - "fuzz/fuzz_targets/**"
+      - ".github/workflows/mutants.yml"
+  schedule:
+    - cron: "0 4 * * 1" # 04:00 UTC every Monday
+  workflow_dispatch:
+
+env:
+  RISC0_DEV_MODE: "1"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ── Plane A: mutate fuzz_props (invariant harness) ────────────────────────
+  # Oracle: cargo test -p fuzz_props --release
+  # Fast (~30–120 s total).  Blocks PRs if any invariant-check logic is
+  # under-tested.
+  mutants-harness:
+    name: Mutants — fuzz_props invariants
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout logos-execution-zone
+        uses: ./.github/actions/checkout-lez
+
+      - name: Install stable Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install logos-blockchain-circuits
+        uses: ./logos-execution-zone/.github/actions/install-logos-blockchain-circuits
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: mutants-harness-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install cargo-mutants
+        run: cargo install cargo-mutants --locked
+
+      # workspace.metadata.cargo-mutants in Cargo.toml sets:
+      #   additional_cargo_args = ["--release"]
+      #   exclude_globs = ["fuzz/fuzz_targets/**"]
+      #   timeout_multiplier = 3.0
+      - name: Run mutation tests on fuzz_props
+        run: |
+          cargo mutants \
+            --package fuzz_props \
+            --in-place \
+            --output mutants-harness.out
+
+      - name: Upload mutants report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutants-harness-report
+          path: mutants-harness.out/
+
+      - name: Write GitHub Step Summary
+        if: always()
+        run: |
+          MISSED=$(wc -l < mutants-harness.out/missed.txt 2>/dev/null | tr -d ' ' || echo 0)
+          CAUGHT=$(wc -l < mutants-harness.out/caught.txt 2>/dev/null | tr -d ' ' || echo 0)
+          {
+            echo "## Mutation Testing — \`fuzz_props\` invariants"
+            echo ""
+            echo "| Result | Count |"
+            echo "|--------|-------|"
+            echo "| ✅ Caught | ${CAUGHT} |"
+            echo "| ❌ Survived | ${MISSED} |"
+            echo ""
+            if [ "${MISSED}" -gt 0 ]; then
+              echo "### Surviving mutants (invariant-checker gaps)"
+              echo '```'
+              cat mutants-harness.out/missed.txt 2>/dev/null || true
+              echo '```'
+              echo ""
+              echo "> Each surviving mutant represents a mutation in the invariant-checking"
+              echo "> code that \`cargo test -p fuzz_props\` did not detect."
+              echo "> Add a property-test that specifically exercises that code path."
+            else
+              echo "> All mutants caught — invariant-checking logic is fully covered."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail if any mutations survived
+        run: |
+          if [ -s mutants-harness.out/missed.txt ]; then
+            echo "ERROR: surviving mutants found in fuzz_props — see artifact and Step Summary"
+            cat mutants-harness.out/missed.txt
+            exit 1
+          fi
+
+  # ── Plane B: mutate LEZ protocol code, oracle = corpus regression ─────────
+  # Each mutant: rebuild nssa/common + replay all 20 fuzz corpora (-runs=0).
+  # Surviving mutants = protocol bugs the committed corpus has never caught.
+  # Runs on schedule (weekly Monday) or manual workflow_dispatch only.
+  mutants-protocol:
+    name: Mutants — LEZ protocol vs corpus
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout logos-execution-zone
+        uses: ./.github/actions/checkout-lez
+
+      # cargo-fuzz requires nightly.
+      - name: Install Rust nightly toolchain
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: llvm-tools-preview
+
+      - name: Install logos-blockchain-circuits
+        uses: ./logos-execution-zone/.github/actions/install-logos-blockchain-circuits
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: mutants-protocol-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install cargo-fuzz and cargo-mutants
+        run: |
+          cargo install cargo-fuzz --locked
+          cargo install cargo-mutants --locked
+
+      - name: Make corpus-regression wrapper executable
+        run: chmod +x scripts/mutants-corpus-test.sh
+
+      # Build all 20 fuzz targets once before the mutation loop so that each
+      # mutant only needs to rebuild the mutated crate, not the fuzz harness.
+      # Keep this list in sync with scripts/mutants-corpus-test.sh.
+      - name: Pre-build fuzz targets
+        run: |
+          for target in \
+            fuzz_transaction_decoding fuzz_stateless_verification \
+            fuzz_state_transition fuzz_block_verification \
+            fuzz_encoding_roundtrip fuzz_signature_verification \
+            fuzz_replay_prevention fuzz_state_diff_computation \
+            fuzz_validate_execute_consistency fuzz_state_serialization \
+            fuzz_witness_set_verification fuzz_program_deployment_lifecycle \
+            fuzz_apply_state_diff_split_path fuzz_multi_block_state_sequence \
+            fuzz_sequencer_vs_replayer fuzz_merkle_tree \
+            fuzz_transaction_properties fuzz_privacy_preserving_witness \
+            fuzz_encoding_privacy_preserving fuzz_nullifier_set_roundtrip; do
+            cargo fuzz build "${target}"
+          done
+
+      # cargo-mutants >=24 dropped --test-command; intercept "cargo test" with a
+      # fake cargo wrapper that runs the corpus oracle instead.  cargo-mutants is
+      # called as a direct binary (not through `cargo`) so the CARGO env var we
+      # set is respected rather than being overridden by cargo's process launch.
+      - name: Run mutation tests against LEZ (nssa + common)
+        run: |
+          REAL_CARGO="$(command -v cargo)"
+          FAKE_CARGO="$(mktemp /tmp/fake-cargo-XXXXXX)"
+          # Intercept the test *execution* phase only; forward the build phase
+          # (cargo test --no-run) to the real cargo so mutants are compiled.
+          # cargo-mutants uses:
+          #   Build phase: cargo test --no-run --verbose --package=...
+          #   Test phase:  cargo test --verbose --package=...
+          printf '#!/bin/bash\n_has_no_run=false\nfor _a in "$@"; do [ "$_a" = "--no-run" ] && _has_no_run=true && break; done\nif [ "${1:-}" = "test" ] && [ "$_has_no_run" = "false" ]; then\n    FUZZ_REPO="%s" exec "%s"\nelse\n    exec "%s" "$@"\nfi\n' \
+              "${{ github.workspace }}" \
+              "${{ github.workspace }}/scripts/mutants-corpus-test.sh" \
+              "$REAL_CARGO" > "$FAKE_CARGO"
+          chmod +x "$FAKE_CARGO"
+          # cargo install places cargo-mutants next to cargo in the same bin dir.
+          MUTANTS_BIN="$(command -v cargo-mutants 2>/dev/null || echo "$(dirname "$REAL_CARGO")/cargo-mutants")"
+          cd "${{ github.workspace }}/logos-execution-zone"
+          # cargo-mutants is a Cargo plugin; when invoked directly (not via
+          # `cargo mutants`) we must supply "mutants" as argv[1] ourselves.
+          CARGO="$FAKE_CARGO" \
+              "$MUTANTS_BIN" mutants \
+                --package nssa \
+                --package common \
+                --in-place \
+                --output "${{ github.workspace }}/mutants-protocol.out" \
+                --timeout-multiplier 5.0
+          rm -f "$FAKE_CARGO"
+
+      - name: Upload mutants report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutants-protocol-report
+          path: mutants-protocol.out/
+
+      - name: Write GitHub Step Summary
+        if: always()
+        run: |
+          MISSED=$(wc -l < mutants-protocol.out/missed.txt 2>/dev/null | tr -d ' ' || echo 0)
+          CAUGHT=$(wc -l < mutants-protocol.out/caught.txt 2>/dev/null | tr -d ' ' || echo 0)
+          {
+            echo "## Mutation Testing — LEZ protocol vs committed corpus"
+            echo ""
+            echo "| Result | Count |"
+            echo "|--------|-------|"
+            echo "| ✅ Caught by corpus | ${CAUGHT} |"
+            echo "| ❌ Survived (corpus gap) | ${MISSED} |"
+            echo ""
+            if [ "${MISSED}" -gt 0 ]; then
+              echo "### Surviving mutants (corpus gaps — protocol bugs not yet reached)"
+              echo '```'
+              cat mutants-protocol.out/missed.txt 2>/dev/null || true
+              echo '```'
+              echo ""
+              echo "> For each surviving mutant:"
+              echo "> 1. Run \`cargo fuzz run <target>\` targeting the mutated function."
+              echo "> 2. Save the crashing input to \`corpus/libfuzz/<target>/\`."
+              echo "> 3. Commit the corpus entry — the next run will show \`CAUGHT\`."
+            else
+              echo "> All mutants caught — committed corpus covers all tested mutation points."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

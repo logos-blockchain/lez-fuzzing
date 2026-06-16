@@ -1,4 +1,10 @@
-# Fuzzing Guide
+<div align="center">
+
+# 🔬 Fuzzing Guide
+
+**The full developer guide to running, extending, and triaging the LEZ fuzzing infrastructure.**
+
+</div>
 
 This document covers how to run fuzz targets, add new targets, minimise failures,
 and convert findings into regression tests.
@@ -9,7 +15,7 @@ directory that must be cloned separately).
 
 ---
 
-## Architecture
+## 🏗️ Architecture
 
 The fuzz workspace (`fuzz/`) is a single Cargo workspace that covers **both** fuzzing
 engines via Cargo features.  No separate Cargo manifest is needed.
@@ -38,7 +44,7 @@ The `cfg` attributes in the macro expansion resolve against the **calling crate'
 
 ---
 
-## Prerequisites
+## 🧰 Prerequisites
 
 ```bash
 # libFuzzer lane
@@ -61,7 +67,7 @@ cargo install cargo-afl
 
 ---
 
-## Repository Setup
+## 📁 Repository Setup
 
 `lez-fuzzing` is a **standalone repository** — it does **not** use git submodules.
 It expects the LEZ codebase to be cloned at `../logos-execution-zone` relative to itself.
@@ -79,7 +85,7 @@ git clone <LEZ_FUZZING_REPO_URL>   lez-fuzzing
 
 ---
 
-## How to Run
+## ▶️ How to Run
 
 All fuzz targets must be run with `RISC0_DEV_MODE=1` to disable expensive ZK
 proof generation. The `just` recipes handle this automatically.
@@ -99,11 +105,11 @@ just fuzz-regression
 
 ---
 
-## Available Fuzz Targets
+## 🎯 Available Fuzz Targets
 
 | Target | What it fuzzes | Entry point |
 |--------|---------------|-------------|
-| `fuzz_transaction_decoding` | Borsh decoding of `NSSATransaction`, `Block`, and `HashableBlockData`; roundtrip re-encoding of successfully decoded transactions | `fuzz/fuzz_targets/fuzz_transaction_decoding.rs` |
+| `fuzz_transaction_decoding` | Borsh decoding of `LeeTransaction`, `Block`, and `HashableBlockData`; roundtrip re-encoding of successfully decoded transactions | `fuzz/fuzz_targets/fuzz_transaction_decoding.rs` |
 | `fuzz_stateless_verification` | `transaction_stateless_check()` no-panic on arbitrary bytes; idempotency — a transaction that passes the check must pass it again | `fuzz/fuzz_targets/fuzz_stateless_verification.rs` |
 | `fuzz_state_transition` | `execute_check_on_state()` across up to 8 transactions with fuzz-driven initial state and monotonically-advancing block context; asserts **StateIsolationOnFailure** (balances unchanged on rejection), **BalanceConservation** (total balance unchanged on success), and **ReplayRejection** (nonce consumed on first acceptance) | `fuzz/fuzz_targets/fuzz_state_transition.rs` |
 | `fuzz_block_verification` | Three block-hash invariants: **HashRoundTrip** (`HashableBlockData::from(Block)` is lossless), **HashPreimage** (block_id, prev_block_hash, timestamp each individually affect the hash), **TxOrderCommitment** (reversing the transaction list changes the hash) | `fuzz/fuzz_targets/fuzz_block_verification.rs` |
@@ -118,10 +124,15 @@ just fuzz-regression
 | `fuzz_apply_state_diff_split_path` | **SplitPathEquivalence**: for every known account, `validate_on_state` + `apply_state_diff` must produce exactly the same balance, nonce, data, and program_owner as `execute_check_on_state`; **NonceIncrementCorrectness**: nonce after the split path equals nonce after the direct path for all signer accounts (catches bugs in the two-step `apply_state_diff` nonce-increment logic) | `fuzz/fuzz_targets/fuzz_apply_state_diff_split_path.rs` |
 | `fuzz_multi_block_state_sequence` | **LongRangeBalanceConservation**: total genesis-account balance identical before and after all N (≤ 16) blocks; **FailedTxNonceStability**: every genesis-account nonce unchanged after a rejected transaction; **PerBlockReplayRejection**: every transaction accepted in block B is rejected in block B+1 (cumulative nonce-interaction coverage) | `fuzz/fuzz_targets/fuzz_multi_block_state_sequence.rs` |
 | `fuzz_sequencer_vs_replayer` | **SequencerReplayerEquivalence**: for every known account (genesis ∪ diff-declared), the sequencer path (`validate_on_state` → `apply_state_diff`) and the replayer path (`execute_check_on_state`) must produce identical balance, nonce, data, and program_owner after applying a full block of up to 8 transactions plus the mandatory clock invocation; **ReplayerAcceptsAllSequencerTxs**: every transaction accepted by `validate_on_state` must also be accepted by `execute_check_on_state`; **ClockConsistency**: the mandatory clock invocation must succeed on both paths and leave both states identical | `fuzz/fuzz_targets/fuzz_sequencer_vs_replayer.rs` |
+| `fuzz_merkle_tree` | Commitment Merkle tree via the commitment set: **ProofSome**, **ProofValid** (leaf + auth path recomputes the root), **NonMembershipNone**, **IndicesSequential** | `fuzz/fuzz_targets/fuzz_merkle_tree.rs` |
+| `fuzz_transaction_properties` | Transaction property invariants: **HashDeterministic** / **HashNonDefault**, **SignerIds** derived from witness keys & non-empty, **AffectedAccountsContainSigners**, **PublicDiffNonEmptyOnSuccess** | `fuzz/fuzz_targets/fuzz_transaction_properties.rs` |
+| `fuzz_privacy_preserving_witness` | `privacy_preserving_transaction::WitnessSet`: **CorrectVerification** (witness for message A passes `signatures_are_valid_for(A)`), **MessageIsolation**, **SignerIdsMatchWitnessKeys** | `fuzz/fuzz_targets/fuzz_privacy_preserving_witness.rs` |
+| `fuzz_encoding_privacy_preserving` | Privacy-preserving encoding: **MessageEncodingRoundtrip**, **TxEncodingDeterministic** / **NonEmpty** | `fuzz/fuzz_targets/fuzz_encoding_privacy_preserving.rs` |
+| `fuzz_nullifier_set_roundtrip` | `NullifierSet` Borsh serialisation: **NullifierSetRoundtrip** (decode→encode identity for the hand-written impl) | `fuzz/fuzz_targets/fuzz_nullifier_set_roundtrip.rs` |
 
 ---
 
-## How to Add a New Fuzz Target
+## ➕ How to Add a New Fuzz Target
 
 ### Step 1 — Scaffold with `just new-target`
 
@@ -159,6 +170,7 @@ which:
 - Inserts the target name into every strategy matrix and the perf-baseline shell
   loop in [`.github/workflows/fuzz.yml`](../.github/workflows/fuzz.yml).
 
+> [!TIP]
 > **Manual fallback:** if you create a target without `just new-target`, add the
 > entry yourself:
 >
@@ -197,12 +209,13 @@ cd fuzz && cargo afl build \
 
 ---
 
-## AFL++ Parallel Fuzzing Lane
+## 🔀 AFL++ Parallel Fuzzing Lane
 
 ### Prerequisites
 
 Install AFL++ natively on your machine.
 
+> [!NOTE]
 > **Note on Linux package versions**: The `afl++` package in Debian stable (Bookworm)
 > and Ubuntu LTS is several major versions behind the current AFL++ 4.x series and may
 > be incompatible with `cargo-afl`. **Build from source** for a current version.
@@ -222,6 +235,7 @@ cd ..
 cargo install cargo-afl
 ```
 
+> [!IMPORTANT]
 > **macOS: run `afl-system-config` once before fuzzing** — AFL++ uses System V shared
 > memory (`shmget`) to pass coverage bitmaps between the fuzzer and the target.  macOS
 > ships with very small defaults (`kern.sysv.shmmax = 4 MB`, `kern.sysv.shmmni = 32`)
@@ -245,6 +259,7 @@ cargo install cargo-afl
 > each restart.  The `just fuzz-afl` and `just fuzz-afl-parallel` recipes **do not**
 > call this automatically because it requires `sudo`.
 
+> [!IMPORTANT]
 > **macOS: crash reporter must be disabled** — AFL++ detects the macOS `ReportCrash`
 > daemon and aborts if it is active (it delays crash notifications and causes AFL++ to
 > mis-classify crashes as timeouts).  The `just fuzz-afl` and `just fuzz-afl-parallel`
@@ -361,24 +376,24 @@ The nightly AFL++ CI workflow has two jobs:
 
 | Job | Triggers | Matrix |
 |-----|----------|--------|
-| `afl-smoke` | nightly + `workflow_dispatch` | 7 priority targets, 120 s each |
-| `afl-coverage` | nightly, `needs: afl-smoke` | 3 key targets; LLVM HTML report |
+| `afl-smoke` | nightly + `workflow_dispatch` | all 20 targets, 60 s each |
+| `afl-coverage-aggregate` | nightly, `needs: afl-smoke` | all 20 targets merged into one LLVM HTML report |
 
-The smoke job:
-1. Builds the target with `cargo afl build --no-default-features --features fuzzer-afl`
-2. Runs `afl-fuzz` for 120 s in `aflplusplus/aflplusplus:v4.40c` container
-3. Syncs new queue entries into `fuzz/corpus/<target>/` and opens a corpus PR
-4. Uploads crashes/hangs as a workflow artifact
+The smoke job (one matrix leg per target, on `ubuntu-latest`):
+1. Builds AFL++ from source, then builds the target with `cargo afl build --no-default-features --features fuzzer-afl`
+2. Runs `afl-fuzz` for 60 s (`timeout 60`)
+3. Reports edge-bitmap coverage to the job step summary
+4. Uploads the queue/crashes/hangs as a workflow artifact
 
-The coverage job:
-1. Downloads the smoke findings
-2. Rebuilds with `RUSTFLAGS="-C instrument-coverage"`
-3. Runs all corpus + queue inputs through the binary
-4. Merges `.profraw` → `.profdata` → HTML report via `llvm-cov show`
+The coverage-aggregate job:
+1. Downloads every smoke leg's findings
+2. Rebuilds all 20 targets with `RUSTFLAGS="-C instrument-coverage"`
+3. Runs all checked-in corpus + AFL queue inputs through each binary
+4. Merges every `.profraw` → one `.profdata` → a single combined HTML report via `llvm-cov show`
 
 ---
 
-## Updating the LEZ Dependency
+## 🔄 Updating the LEZ Dependency
 
 `lez-fuzzing` reads LEZ source directly from `../logos-execution-zone`. To pick up LEZ
 changes, simply update that repo:
@@ -401,7 +416,7 @@ just update-lez
 
 ---
 
-## Minimising & Reproducing Failures
+## 🐛 Minimising & Reproducing Failures
 
 When `cargo fuzz` finds a crash it writes an artifact to
 `fuzz/artifacts/fuzz_<target>/crash-<hash>`.
@@ -440,7 +455,7 @@ Open a PR. The `regression` CI job will permanently block re-introduction of thi
 
 ---
 
-## Coverage Reports
+## 📊 Coverage Reports
 
 ### Step 1 — libFuzzer coverage (via `cargo fuzz coverage`)
 
@@ -476,7 +491,7 @@ automates steps 2–5 and uploads the report as a workflow artifact.
 
 ---
 
-## Invariant Framework
+## 🛡️ Invariant Framework
 
 Shared invariants live in `fuzz_props/src/invariants.rs`. There are two layers:
 
@@ -538,7 +553,7 @@ To add a new invariant:
 
 ---
 
-## Input Generators
+## 🎲 Input Generators
 
 The `fuzz_props` crate provides two layers of input generation:
 
@@ -558,19 +573,19 @@ fuzz target parameters for zero-boilerplate structured fuzzing.
 | `ArbWitnessSet` | `WitnessSet` (0–3 `(Signature, PublicKey)` pairs; mixes valid and invalid) |
 | `ArbPublicTransaction` | `PublicTransaction` (composed from `ArbPubTxMessage` + `ArbWitnessSet`) |
 | `ArbProgramDeploymentTransaction` | `ProgramDeploymentTransaction` (arbitrary bytecode) |
-| `ArbHashableBlockData` | `HashableBlockData` (0–7 `ArbNSSATransaction` entries, random header fields) |
-| `ArbNSSATransaction` | `NSSATransaction` (`Public` or `ProgramDeployment` variant; `PrivacyPreserving` excluded) |
+| `ArbHashableBlockData` | `HashableBlockData` (0–7 `ArbLeeTransaction` entries, random header fields) |
+| `ArbLeeTransaction` | `LeeTransaction` (`Public` or `ProgramDeployment` variant; `PrivacyPreserving` excluded) |
 
 ### `fuzz_props::generators` (libFuzzer helpers + proptest strategies)
 
 | Generator | Covers |
 |-----------|--------|
 | `arbitrary_fuzz_state()` | 1–8 fuzz-driven accounts with arbitrary IDs, balances, and private keys; used by `fuzz_state_transition`, `fuzz_replay_prevention`, `fuzz_validate_execute_consistency`, `fuzz_state_diff_computation` |
-| `arb_fuzz_native_transfer()` | Correctly-signed native-transfer `NSSATransaction` referencing accounts from an `arbitrary_fuzz_state()` result; gives the fuzzer a path to successful state transitions |
-| `arbitrary_transaction()` | Structured `NSSATransaction` (`Public` or `ProgramDeployment`) from unstructured bytes via `ArbNSSATransaction` |
+| `arb_fuzz_native_transfer()` | Correctly-signed native-transfer `LeeTransaction` referencing accounts from an `arbitrary_fuzz_state()` result; gives the fuzzer a path to successful state transitions |
+| `arbitrary_transaction()` | Structured `LeeTransaction` (`Public` or `ProgramDeployment`) from unstructured bytes via `ArbLeeTransaction` |
 | `arb_borsh_transaction_bytes()` | Raw Borsh bytes including invalid encodings |
-| `signer_account_ids()` | Extracts `AccountId`s of all signers from an `NSSATransaction`'s witness set; used to derive signer IDs before `apply_state_diff` consumes the diff |
-| `arb_native_transfer_tx()` | Valid native-transfer `NSSATransaction` between known testnet genesis accounts (proptest strategy) |
+| `signer_account_ids()` | Extracts `AccountId`s of all signers from an `LeeTransaction`'s witness set; used to derive signer IDs before `apply_state_diff` consumes the diff |
+| `arb_native_transfer_tx()` | Valid native-transfer `LeeTransaction` between known testnet genesis accounts (proptest strategy) |
 | `test_accounts()` | Returns `(AccountId, PrivateKey)` pairs from `testnet_initial_state` |
 | `arb_hashable_block_data()` | `HashableBlockData` with 0–8 valid native transfers (proptest strategy) |
 | `arb_invalid_account_state_tx()` | Phantom accounts + overflow amounts — expected to be rejected (IS-3) |
@@ -579,7 +594,7 @@ fuzz target parameters for zero-boilerplate structured fuzzing.
 
 ---
 
-## Performance Baseline
+## ⚡ Performance Baseline
 
 Measured on a 4-core x86_64 Linux runner with `RISC0_DEV_MODE=1`:
 
@@ -600,7 +615,13 @@ Measured on a 4-core x86_64 Linux runner with `RISC0_DEV_MODE=1`:
 | `fuzz_apply_state_diff_split_path` | ~5 000 exec/sec *(estimate)* |
 | `fuzz_multi_block_state_sequence` | ~1 000 exec/sec *(estimate)* |
 | `fuzz_sequencer_vs_replayer` | ~2 000 exec/sec *(estimate)* |
+| `fuzz_merkle_tree` | ~20 000 exec/sec *(estimate)* |
+| `fuzz_transaction_properties` | ~15 000 exec/sec *(estimate)* |
+| `fuzz_privacy_preserving_witness` | ~15 000 exec/sec *(estimate)* |
+| `fuzz_encoding_privacy_preserving` | ~50 000 exec/sec *(estimate)* |
+| `fuzz_nullifier_set_roundtrip` | ~100 000 exec/sec *(estimate)* |
 
+> [!NOTE]
 > Throughput figures for the five new targets are rough estimates; run `just perf-baseline`
 > locally or check the `perf-baseline` CI artifact for up-to-date measurements.
 
@@ -617,7 +638,7 @@ just fuzz-afl-parallel fuzz_state_transition $(nproc) 3600
 
 ---
 
-## ZK-Proof Cost Warning
+## ⚠️ ZK-Proof Cost Warning
 
 `PrivacyPreservingTransaction` uses `risc0-zkvm` (seconds per proof).
 All fuzz targets **must** set `RISC0_DEV_MODE=1` in the environment and the `just`
@@ -632,12 +653,44 @@ flag stubs out ZK proof generation and replaces it with a fast mock implementati
 
 ---
 
-## Known Limitations & Future Work
+## 🧬 Mutation testing — the two planes
+
+Mutation testing here runs in two distinct planes, answering two different questions:
+
+- **Plane A — "does a test catch this mutant?"** Run with a standard `cargo test`
+  oracle against the `lee` crate's own unit tests.
+- **Plane B — "does the committed fuzz corpus catch this mutant?"** Run with
+  `just mutants-protocol`, which swaps `cargo test` for a fuzz-corpus replay
+  (`cargo fuzz run … -runs=0`) as the oracle.
+
+A mutant surviving Plane B is **not automatically a corpus gap to fill.** Some
+mutations are only reachable by a fully-valid executing transaction or by a
+deliberately-misbehaving program — neither of which a fuzzer can synthesise from
+random bytes, and both of which are better pinned by deterministic unit tests in
+the `lee` crate. Encoding such scenarios as input-independent fuzz targets only
+duplicates those tests and slows every corpus replay.
+
+The mutants that are **expected** to survive Plane B (and where each is actually
+covered) are catalogued in [`mutants-not-fuzzable.md`](mutants-not-fuzzable.md).
+Reconcile new `mutants-protocol` runs against that list: only a surviving mutant
+**not** on it warrants a new corpus input.
+
+**No input-independent targets.** A fuzz target whose closure ignores its input
+(`|_data|`) is a deterministic unit test, not a fuzzer — it belongs in the LEZ
+crate that owns the code. Three such targets once existed
+(`fuzz_common_invariants`, `fuzz_genesis_invariants`,
+`fuzz_system_account_protection`); their invariants were ported to LEZ unit tests
+and the targets removed. The mutant→test mapping is recorded under "Group 2" in
+[`mutants-not-fuzzable.md`](mutants-not-fuzzable.md). When adding a target, drive it
+from `data`; if a check doesn't depend on the input, write it as a unit test in
+`logos-execution-zone` instead.
+
+---
+
+## 🚧 Known Limitations & Future Work
 
 | Item | Notes |
 |------|-------|
 | `PrivacyPreservingTransaction` coverage | Excluded from `fuzz_encoding_roundtrip` because its ZK receipt cannot be reconstructed in a fuzzing loop. A dedicated slow target with `RISC0_DEV_MODE=1` and `proptest` should be added after the current targets are stable |
 | `fuzz_validate_execute_consistency` new-account detection | If `execute_check_on_state` creates a brand-new account absent from both the genesis set and the diff, that state-widening will not be detected — full detection requires iterating all accounts in `V03State`, which the API does not currently expose |
-| Differential testing (sequencer vs replayer) | ✅ Implemented — `fuzz_sequencer_vs_replayer` feeds the same block through the sequencer path (`validate_on_state` → `apply_state_diff`) and the replayer path (`execute_check_on_state`) and asserts identical state for all known accounts |
-| AFL++ integration | ✅ Implemented — `just afl-build`, `just fuzz-afl`, `just fuzz-afl-parallel`; nightly CI in `.github/workflows/fuzz-afl.yml`; single `fuzz/Cargo.toml` covers both engines via feature flags |
 | LEZ version tracking | There is no submodule pin — `lez-fuzzing` reads `../logos-execution-zone` as checked out. Update that repo to a release tag or a tested commit, then run `just update-lez` (which does `git pull --ff-only`) and open a PR to bump it |

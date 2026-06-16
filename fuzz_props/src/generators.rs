@@ -1,8 +1,8 @@
 use arbitrary::{Arbitrary, Unstructured};
-use common::{block::HashableBlockData, transaction::NSSATransaction};
+use common::{block::HashableBlockData, transaction::LeeTransaction};
 use nssa::{AccountId, PrivateKey};
 
-use crate::arbitrary_types::{ArbAccountId, ArbNSSATransaction, ArbPrivateKey};
+use crate::arbitrary_types::{ArbAccountId, ArbLeeTransaction, ArbPrivateKey};
 use proptest::prelude::*;
 use testnet_initial_state::initial_pub_accounts_private_keys;
 
@@ -12,22 +12,22 @@ use testnet_initial_state::initial_pub_accounts_private_keys;
 /// witness set.  Used by fuzz targets that need to verify nonce
 /// increments after `execute_check_on_state`.
 #[must_use]
-pub fn signer_account_ids(tx: &common::transaction::NSSATransaction) -> Vec<nssa::AccountId> {
-    use common::transaction::NSSATransaction;
+pub fn signer_account_ids(tx: &common::transaction::LeeTransaction) -> Vec<nssa::AccountId> {
+    use common::transaction::LeeTransaction;
     match tx {
-        NSSATransaction::Public(pt) => pt
+        LeeTransaction::Public(pt) => pt
             .witness_set()
             .signatures_and_public_keys()
             .iter()
             .map(|(_, pk)| nssa::AccountId::from(pk))
             .collect(),
-        NSSATransaction::PrivacyPreserving(pt) => pt
+        LeeTransaction::PrivacyPreserving(pt) => pt
             .witness_set()
             .signatures_and_public_keys()
             .iter()
             .map(|(_, pk)| nssa::AccountId::from(pk))
             .collect(),
-        NSSATransaction::ProgramDeployment(_) => vec![],
+        LeeTransaction::ProgramDeployment(_) => vec![],
     }
 }
 
@@ -74,7 +74,7 @@ pub fn arbitrary_fuzz_state(u: &mut Unstructured<'_>) -> arbitrary::Result<Vec<F
     .collect()
 }
 
-/// Generate a native-transfer [`NSSATransaction`] between two accounts chosen
+/// Generate a native-transfer [`LeeTransaction`] between two accounts chosen
 /// from `accounts`.
 ///
 /// Because every account in the slice has a known private key, the resulting
@@ -87,7 +87,7 @@ pub fn arbitrary_fuzz_state(u: &mut Unstructured<'_>) -> arbitrary::Result<Vec<F
 pub fn arb_fuzz_native_transfer(
     u: &mut Unstructured<'_>,
     accounts: &[FuzzAccount],
-) -> arbitrary::Result<NSSATransaction> {
+) -> arbitrary::Result<LeeTransaction> {
     if accounts.is_empty() {
         return Err(arbitrary::Error::IncorrectFormat);
     }
@@ -112,9 +112,9 @@ pub fn arb_fuzz_native_transfer(
 
 // ── Arbitrary (for libFuzzer targets) ────────────────────────────────────────
 
-/// Generate a structurally plausible `NSSATransaction` from unstructured bytes.
-pub fn arbitrary_transaction(u: &mut Unstructured<'_>) -> arbitrary::Result<NSSATransaction> {
-    ArbNSSATransaction::arbitrary(u).map(|w| w.0)
+/// Generate a structurally plausible `LeeTransaction` from unstructured bytes.
+pub fn arbitrary_transaction(u: &mut Unstructured<'_>) -> arbitrary::Result<LeeTransaction> {
+    ArbLeeTransaction::arbitrary(u).map(|w| w.0)
 }
 
 // ── proptest strategies ───────────────────────────────────────────────────────
@@ -128,7 +128,7 @@ prop_compose! {
         to_idx   in 0..accounts.len(),
         nonce    in 0_u128..1_000_u128,
         amount   in 0_u128..10_000_u128,
-    ) -> NSSATransaction {
+    ) -> LeeTransaction {
         let (from_id, from_key) = &accounts[from_idx];
         let (to_id, _)          = &accounts[to_idx];
         common::test_utils::create_transaction_native_token_transfer(
@@ -146,11 +146,11 @@ pub fn test_accounts() -> Vec<(AccountId, PrivateKey)> {
         .collect()
 }
 
-/// Strategy: raw bytes that are valid borsh encodings of `NSSATransaction`.
+/// Strategy: raw bytes that are valid borsh encodings of `LeeTransaction`.
 pub fn arb_borsh_transaction_bytes() -> impl Strategy<Value = Vec<u8>> {
     any::<Vec<u8>>().prop_map(|bytes| {
         // Either pass through raw bytes OR encode a known dummy transaction
-        if borsh::from_slice::<NSSATransaction>(&bytes).is_ok() {
+        if borsh::from_slice::<LeeTransaction>(&bytes).is_ok() {
             bytes
         } else {
             borsh::to_vec(&common::test_utils::produce_dummy_empty_transaction()).unwrap()
@@ -183,7 +183,7 @@ prop_compose! {
         phantom_id_bytes in proptest::array::uniform32(0_u8..),
         amount in (u128::MAX / 2)..u128::MAX,   // overflow-inducing amount
         nonce  in 0_u128..10_u128,
-    ) -> NSSATransaction {
+    ) -> LeeTransaction {
         let phantom_id = nssa::AccountId::new(phantom_id_bytes);
         // Attempt to sign with a key that has no matching on-chain account
         let signing_key = nssa::PrivateKey::try_new(phantom_id_bytes)
@@ -204,11 +204,11 @@ prop_compose! {
 /// attack candidates) and some are re-ordered permutations of a valid sequence.
 /// Used in proptest-level tests and as a seed generator for the state-transition
 /// fuzz target.
-pub fn arb_duplicate_tx_sequence() -> impl Strategy<Value = Vec<NSSATransaction>> {
+pub fn arb_duplicate_tx_sequence() -> impl Strategy<Value = Vec<LeeTransaction>> {
     let accounts = test_accounts();
     proptest::collection::vec(arb_native_transfer_tx(accounts), 1..5_usize).prop_flat_map(|txs| {
         // Build a sequence that: original | duplicates | reversed
-        let duped: Vec<NSSATransaction> = txs
+        let duped: Vec<LeeTransaction> = txs
             .iter()
             .cloned()
             .chain(txs.iter().cloned()) // append exact duplicates
@@ -225,7 +225,7 @@ pub fn arb_duplicate_tx_sequence() -> impl Strategy<Value = Vec<NSSATransaction>
 /// - self-transfers (sender == recipient),
 /// - max-nonce wrapping,
 /// - alternating valid / invalid transactions to test partial-batch isolation.
-pub fn arb_pathological_sequence() -> impl Strategy<Value = Vec<NSSATransaction>> {
+pub fn arb_pathological_sequence() -> impl Strategy<Value = Vec<LeeTransaction>> {
     let accounts = test_accounts();
     let n = accounts.len();
     proptest::collection::vec((0..n, 0..n, 0_u128..5_u128, any::<bool>()), 1..8_usize).prop_map(
