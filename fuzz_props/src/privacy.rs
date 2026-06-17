@@ -116,7 +116,7 @@ pub fn synthesize_passing_proof(
 /// `public_account_nonce_increment` panics on overflow. An uncapped nonce would let the
 /// fuzzer drive a signer to `u128::MAX` via a forced-pass post-state and then trip that
 /// panic — a self-inflicted artefact, not a protocol bug.
-fn arb_account(u: &mut Unstructured<'_>) -> ArbResult<Account> {
+pub(crate) fn arb_account(u: &mut Unstructured<'_>) -> ArbResult<Account> {
     Ok(Account {
         program_owner: <[u32; 8]>::arbitrary(u)?,
         balance: u128::arbitrary(u)?,
@@ -138,7 +138,7 @@ fn arb_account(u: &mut Unstructured<'_>) -> ArbResult<Account> {
 /// straddle the harness's `block_id` / `timestamp` range (both `< 6`), landing on both sides of the
 /// check. `try_from` rejects `from >= to`; that falls back to unbounded rather than biasing toward
 /// always-valid windows.
-fn arb_validity_window(u: &mut Unstructured<'_>) -> ArbResult<ValidityWindow<u64>> {
+pub(crate) fn arb_validity_window(u: &mut Unstructured<'_>) -> ArbResult<ValidityWindow<u64>> {
     if (u8::arbitrary(u)? % 4) != 0 {
         return Ok(ValidityWindow::new_unbounded());
     }
