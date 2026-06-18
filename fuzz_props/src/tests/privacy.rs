@@ -67,6 +67,59 @@ fn synthesized_proof_reaches_checks_5_6_and_applies() {
     );
 }
 
+/// Negative counterpart to the test above: the synthesised `FakeReceipt` is a forgery that
+/// must pass **only** under `RISC0_DEV_MODE`. With dev mode off, `Receipt::verify` runs the
+/// real integrity check, the fake fails it, and the executor must reject the transaction at
+/// check 4 — never reaching checks 5–6 or `apply_state_diff`.
+///
+/// This locks the dev-mode boundary in CI: it asserts the forgery is genuinely inert in a
+/// production-mode verifier, so `synthesize_passing_proof` can never be mistaken for a
+/// real-proof generator. It is the mirror of `synthesized_proof_reaches_checks_5_6_and_applies`
+/// — exactly one of the two runs in any given environment (a bare `cargo test` runs this one;
+/// `RISC0_DEV_MODE=1 cargo test` runs the other), so both directions are covered across CI.
+#[test]
+fn synthesized_proof_is_rejected_without_dev_mode() {
+    let dev_mode = std::env::var("RISC0_DEV_MODE").is_ok_and(|v| v == "1" || v == "true");
+    if dev_mode {
+        return;
+    }
+
+    let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0);
+
+    // Same well-formed message as the positive test: checks 1–3 are vacuous/trivially met, so a
+    // rejection can only come from check 4 (proof verification) failing on the fake receipt.
+    let aid = AccountId::new([7_u8; 32]);
+    let commitment = Commitment::new(&aid, &Account::default());
+    let message = PPMessage {
+        public_account_ids: vec![],
+        nonces: vec![],
+        public_post_states: vec![],
+        encrypted_private_post_states: vec![],
+        new_commitments: vec![commitment.clone()],
+        new_nullifiers: vec![],
+        block_validity_window: BlockValidityWindow::new_unbounded(),
+        timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
+    };
+
+    let proof = synthesize_passing_proof(&message, &state, &[]);
+    let witness_set = PPWitnessSet::for_message(&message, proof, &[]);
+    let tx = PrivacyPreservingTransaction::new(message, witness_set);
+
+    assert!(
+        state
+            .transition_from_privacy_preserving_transaction(&tx, 1, 0)
+            .is_err(),
+        "a synthesised fake receipt must be rejected at check 4 when RISC0_DEV_MODE is off - \
+         the forgery must never verify in a production-mode verifier",
+    );
+
+    // The rejection must also leave private state untouched (no commitment inserted).
+    assert!(
+        state.get_proof_for_commitment(&commitment).is_none(),
+        "a rejected transaction must not insert its commitment into the set",
+    );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  Generator contract tests
 //

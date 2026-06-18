@@ -158,7 +158,7 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
             // Non-signer public accounts at applied indices are set to their post-state.
             for (idx, id) in public_account_ids.iter().enumerate() {
                 if idx >= public_post_states.len() {
-                    break; // zip in apply_state_diff truncates to the shorter vector
+                    break; // public_diff zips ids with post_states, truncating to the shorter vec
                 }
                 if signer_ids.contains(id) {
                     continue; // signer accounts also get a nonce increment afterwards

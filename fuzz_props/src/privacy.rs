@@ -260,9 +260,14 @@ pub fn arb_privacy_preserving_tx(
     }
 
     // ── new_nullifiers (unique — validator check 2b) ─────────────────────────────────
-    // Check 6 additionally requires each digest to be a recognised commitment-set root.
-    // Using the live root makes the success path reachable; a random digest drives the
-    // check-6 rejection path.
+    // Check 6 additionally requires each digest to be in the commitment set's `root_history`.
+    // `root_history` starts *empty* on a fresh genesis state and is only seeded once a
+    // commitment-bearing transaction applies (`CommitmentSet::extend` inserts the post-insert
+    // root). So a nullifier digest set to the live root only passes check 6 on a *later*
+    // transaction in the sequence — after an earlier tx grew the commitment set; against the
+    // first tx (empty history) even the live root is rejected. We still use the live root half
+    // the time so the success path becomes reachable once seeded; a random digest always drives
+    // the check-6 rejection path.
     let n_null = (u8::arbitrary(u)? as usize) % 3;
     let live_root = state.commitment_set_digest();
     let mut new_nullifiers: Vec<(Nullifier, CommitmentSetDigest)> = Vec::new();
