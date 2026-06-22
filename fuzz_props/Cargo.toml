@@ -15,6 +15,9 @@ nssa       = { workspace = true }
 nssa_core  = { workspace = true }
 common     = { workspace = true }
 borsh      = { workspace = true }
+# Needed by `privacy.rs` to synthesise a *passing* dev-mode fake receipt (Path B):
+# a privacy-preserving proof is a borsh-encoded `risc0_zkvm::InnerReceipt`.
+risc0-zkvm = { workspace = true }
 proptest   = "1.4"
 arbitrary  = { version = "1", features = ["derive"] }
 testnet_initial_state = { workspace = true }

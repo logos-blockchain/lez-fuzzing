@@ -41,6 +41,7 @@ targets=(
   fuzz_privacy_preserving_witness
   fuzz_encoding_privacy_preserving
   fuzz_nullifier_set_roundtrip
+  fuzz_privacy_preserving_state_transition
 )
 
 # cargo-fuzz requires the nightly toolchain (-Zsanitizer=address etc.).

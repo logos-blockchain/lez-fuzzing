@@ -164,7 +164,8 @@ jobs:
             fuzz_apply_state_diff_split_path fuzz_multi_block_state_sequence \
             fuzz_sequencer_vs_replayer fuzz_merkle_tree \
             fuzz_transaction_properties fuzz_privacy_preserving_witness \
-            fuzz_encoding_privacy_preserving fuzz_nullifier_set_roundtrip; do
+            fuzz_encoding_privacy_preserving fuzz_nullifier_set_roundtrip \
+            fuzz_privacy_preserving_state_transition; do
             cargo fuzz build "${target}"
           done
 

@@ -60,10 +60,16 @@
     clippy::let_underscore_untyped,
     reason = "seed-generation IO errors are intentionally ignored in tests"
 )]
+#![allow(
+    clippy::pub_with_shorthand,
+    reason = "`pub(crate)` shorthand exposes generators to the test module; the \
+              contradictory `pub_without_shorthand` restriction lint stays active"
+)]
 
 pub mod arbitrary_types;
 pub mod generators;
 pub mod invariants;
+pub mod privacy;
 
 /// Generates the fuzzer entry point for whichever engine this crate is
 /// compiled with, selected via Cargo features:

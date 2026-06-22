@@ -4,7 +4,8 @@ use arbitrary::Unstructured;
 use nssa::{AccountId, PrivateKey};
 
 use crate::generators::{
-    FuzzAccount, arb_fuzz_native_transfer, arbitrary_fuzz_state, signer_account_ids, test_accounts,
+    FuzzAccount, arb_fuzz_native_transfer, arbitrary_fuzz_state, biased_valid_nonce_amount,
+    signer_account_ids, test_accounts,
 };
 
 /// Verifies that `signer_account_ids` returns a **non-empty** list for a properly signed
@@ -132,4 +133,46 @@ fn native_transfer_index_uses_modulo_not_div_add() {
         "arb_fuzz_native_transfer should succeed with valid modulo-bounded indices; \
          mutation: `% accounts.len()` replaced by `/ accounts.len()` or `+ accounts.len()`"
     );
+}
+
+#[test]
+fn biased_nonce_is_always_in_genesis_range() {
+    // Every possible nonce byte must reduce into 0..=3. This rules out the
+    // `/` and `+` variants of the `% 4` reduction, which escape that range.
+    for byte in 0..=u8::MAX {
+        let (nonce, _) = biased_valid_nonce_amount(byte, 0, 0);
+        assert!(
+            nonce <= 3,
+            "byte {byte} produced out-of-range nonce {nonce}"
+        );
+    }
+}
+
+#[test]
+fn biased_nonce_wraps_modulo_four() {
+    // Pin specific residues so `/ 4` (→1, →63) and `+ 4` (→8, →259) both fail.
+    assert_eq!(biased_valid_nonce_amount(4, 0, 0).0, 0);
+    assert_eq!(biased_valid_nonce_amount(255, 0, 0).0, 3);
+    assert_eq!(biased_valid_nonce_amount(7, 0, 0).0, 3);
+}
+
+#[test]
+fn biased_amount_never_exceeds_balance() {
+    for balance in [0_u128, 1, 100, u128::MAX] {
+        for amount_raw in [0_u128, 1, balance, balance.wrapping_add(1), u128::MAX] {
+            let (_, amount) = biased_valid_nonce_amount(0, amount_raw, balance);
+            assert!(
+                amount <= balance,
+                "amount {amount} exceeded balance {balance} (raw {amount_raw})"
+            );
+        }
+    }
+}
+
+#[test]
+fn biased_amount_wraps_modulo_balance_plus_one() {
+    // `10 % 101 == 10` but `10 / 101 == 0`, so this kills the `/` variant.
+    assert_eq!(biased_valid_nonce_amount(0, 10, 100).1, 10);
+    // balance 0 → modulus 1 → amount always 0.
+    assert_eq!(biased_valid_nonce_amount(0, u128::MAX, 0).1, 0);
 }

@@ -3,7 +3,7 @@
 //!
 //! Tests that `to_bytes` / `from_bytes` round-trips work correctly for the
 //! privacy-preserving `Message` type, and that `try_from_circuit_output`
-//! validates ciphertext-to-key length matching.
+//! maps each circuit-output field onto the resulting `Message` unchanged.
 //!
 //! `PrivacyPreservingTransaction` is also tested for serialisation stability
 //! (non-empty, deterministic bytes) without requiring a real ZK receipt.
@@ -18,8 +18,8 @@ use nssa::{
     },
 };
 use nssa_core::{
-    PrivacyPreservingCircuitOutput,
-    account::Nonce,
+    Commitment, PrivacyPreservingCircuitOutput,
+    account::{Account, Nonce},
     program::{BlockValidityWindow, TimestampValidityWindow},
 };
 
@@ -107,31 +107,56 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
         );
     }
 
-    // ── INVARIANT [CircuitOutputAccepted] ─────────────────────────────────────
-    // `try_from_circuit_output` must succeed for a well-formed (empty) circuit
-    // output, mapping the output fields onto the resulting `Message`.
+    // ── INVARIANT [CircuitOutputMapping] ──────────────────────────────────────
+    // `try_from_circuit_output` carries each circuit-output field onto the resulting
+    // `Message` unchanged, and threads through the caller-supplied public_account_ids /
+    // nonces.  The function is infallible (it performs no validation of its own), so a
+    // bare `is_ok()` would be a tautology; instead assert the field mapping, which catches
+    // a mutation that drops, swaps, or defaults any carried field.
     {
-        let empty_output = PrivacyPreservingCircuitOutput {
+        let addr = AccountId::from(
+            &PublicKey::new_from_private_key(
+                &PrivateKey::try_new([1_u8; 32]).expect("known-good"),
+            ),
+        );
+        let account_ids = vec![addr];
+        let nonces = vec![Nonce::from(7_u128)];
+        let post_states = vec![Account::default()];
+        let commitments =
+            vec![Commitment::new(&AccountId::new([9_u8; 32]), &Account::default())];
+
+        let output = PrivacyPreservingCircuitOutput {
             public_pre_states: vec![],
-            public_post_states: vec![],
-            new_commitments: vec![],
+            public_post_states: post_states.clone(),
+            new_commitments: commitments.clone(),
             new_nullifiers: vec![],
             encrypted_private_post_states: vec![],
             block_validity_window: BlockValidityWindow::new_unbounded(),
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
         };
 
-        let result = PPMessage::try_from_circuit_output(
-            vec![], // public_account_ids
-            vec![], // nonces
-            empty_output,
+        let msg = PPMessage::try_from_circuit_output(account_ids.clone(), nonces.clone(), output)
+            .expect("INVARIANT VIOLATION [CircuitOutputMapping]: \
+                     try_from_circuit_output is infallible and must accept any output");
+
+        assert_eq!(
+            msg.public_account_ids, account_ids,
+            "INVARIANT VIOLATION [CircuitOutputMapping]: \
+             public_account_ids not threaded through unchanged",
         );
-        assert!(
-            result.is_ok(),
-            "INVARIANT VIOLATION [CircuitOutputAccepted]: \
-             try_from_circuit_output must accept a well-formed empty output, \
-             got: {:?}",
-            result.err(),
+        assert_eq!(
+            msg.nonces, nonces,
+            "INVARIANT VIOLATION [CircuitOutputMapping]: nonces not threaded through unchanged",
+        );
+        assert_eq!(
+            msg.public_post_states, post_states,
+            "INVARIANT VIOLATION [CircuitOutputMapping]: \
+             public_post_states not carried from the circuit output",
+        );
+        assert_eq!(
+            msg.new_commitments, commitments,
+            "INVARIANT VIOLATION [CircuitOutputMapping]: \
+             new_commitments not carried from the circuit output",
         );
     }
 

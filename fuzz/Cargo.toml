@@ -149,3 +149,9 @@ name = "fuzz_nullifier_set_roundtrip"
 path = "fuzz_targets/fuzz_nullifier_set_roundtrip.rs"
 test = false
 bench = false
+
+[[bin]]
+name = "fuzz_privacy_preserving_state_transition"
+path = "fuzz_targets/fuzz_privacy_preserving_state_transition.rs"
+test = false
+bench = false
