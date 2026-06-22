@@ -1,0 +1,53 @@
+name: LEZ upstream compatibility
+
+# Detects drift between this fuzzing repo and the *latest* logos-execution-zone
+# main, independently of PR gating (which builds against the pinned SHA in
+# .github/actions/checkout-lez). A failure here means upstream main moved in a
+# way that breaks the harness — bump the pinned ref once the break is resolved.
+on:
+  schedule:
+    - cron: "0 4 * * *"
+  push:
+    branches: [ test-privacy-features ]
+  workflow_dispatch:
+
+env:
+  RISC0_DEV_MODE: "1"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-against-upstream-main:
+    name: Build + test against LEZ main
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout logos-execution-zone (main, not the pinned SHA)
+        uses: ./.github/actions/checkout-lez
+        with:
+          ref: main
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: llvm-tools-preview
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: lez-compat-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install logos-blockchain-circuits
+        uses: ./logos-execution-zone/.github/actions/install-logos-blockchain-circuits
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build shared fuzz harness against upstream main
+        run: cargo build -p fuzz_props --release
+
+      - name: Run fuzz_props tests against upstream main
+        run: cargo test -p fuzz_props --release

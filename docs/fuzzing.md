@@ -129,6 +129,7 @@ just fuzz-regression
 | `fuzz_privacy_preserving_witness` | `privacy_preserving_transaction::WitnessSet`: **CorrectVerification** (witness for message A passes `signatures_are_valid_for(A)`), **MessageIsolation**, **SignerIdsMatchWitnessKeys** | `fuzz/fuzz_targets/fuzz_privacy_preserving_witness.rs` |
 | `fuzz_encoding_privacy_preserving` | Privacy-preserving encoding: **MessageEncodingRoundtrip**, **TxEncodingDeterministic** / **NonEmpty** | `fuzz/fuzz_targets/fuzz_encoding_privacy_preserving.rs` |
 | `fuzz_nullifier_set_roundtrip` | `NullifierSet` Borsh serialisation: **NullifierSetRoundtrip** (decode→encode identity for the hand-written impl) | `fuzz/fuzz_targets/fuzz_nullifier_set_roundtrip.rs` |
+| `fuzz_privacy_preserving_state_transition` | Path B — `NSSATransaction::PrivacyPreserving` through `execute_check_on_state` with a dev-mode passing proof, reaching checks 5–6 (`check_commitments_are_new` / `check_nullifiers_are_valid`) and `apply_state_diff`: **No panic**, **StateIsolationOnFailure**, **PrivateStateIsolationOnFailure**, **CommitmentInsertion**, **NonceIncrementCorrectness**, **PostStateApplied**, **ReplayRejection**. Balance conservation is intentionally *not* asserted — the synthesised fake receipt bypasses the circuit guarantee. Requires `RISC0_DEV_MODE=1` | `fuzz/fuzz_targets/fuzz_privacy_preserving_state_transition.rs` |
 
 ---
 
@@ -376,8 +377,8 @@ The nightly AFL++ CI workflow has two jobs:
 
 | Job | Triggers | Matrix |
 |-----|----------|--------|
-| `afl-smoke` | nightly + `workflow_dispatch` | all 20 targets, 60 s each |
-| `afl-coverage-aggregate` | nightly, `needs: afl-smoke` | all 20 targets merged into one LLVM HTML report |
+| `afl-smoke` | nightly + `workflow_dispatch` | all 21 targets, 60 s each |
+| `afl-coverage-aggregate` | nightly, `needs: afl-smoke` | all 21 targets merged into one LLVM HTML report |
 
 The smoke job (one matrix leg per target, on `ubuntu-latest`):
 1. Builds AFL++ from source, then builds the target with `cargo afl build --no-default-features --features fuzzer-afl`
@@ -387,7 +388,7 @@ The smoke job (one matrix leg per target, on `ubuntu-latest`):
 
 The coverage-aggregate job:
 1. Downloads every smoke leg's findings
-2. Rebuilds all 20 targets with `RUSTFLAGS="-C instrument-coverage"`
+2. Rebuilds all 21 targets with `RUSTFLAGS="-C instrument-coverage"`
 3. Runs all checked-in corpus + AFL queue inputs through each binary
 4. Merges every `.profraw` → one `.profdata` → a single combined HTML report via `llvm-cov show`
 
@@ -620,6 +621,7 @@ Measured on a 4-core x86_64 Linux runner with `RISC0_DEV_MODE=1`:
 | `fuzz_privacy_preserving_witness` | ~15 000 exec/sec *(estimate)* |
 | `fuzz_encoding_privacy_preserving` | ~50 000 exec/sec *(estimate)* |
 | `fuzz_nullifier_set_roundtrip` | ~100 000 exec/sec *(estimate)* |
+| `fuzz_privacy_preserving_state_transition` | slow — dev-mode proof synthesis + verification per exec dominates runtime *(estimate)* |
 
 > [!NOTE]
 > Throughput figures for the five new targets are rough estimates; run `just perf-baseline`
@@ -691,6 +693,7 @@ from `data`; if a check doesn't depend on the input, write it as a unit test in
 
 | Item | Notes |
 |------|-------|
-| `PrivacyPreservingTransaction` coverage | Excluded from `fuzz_encoding_roundtrip` because its ZK receipt cannot be reconstructed in a fuzzing loop. A dedicated slow target with `RISC0_DEV_MODE=1` and `proptest` should be added after the current targets are stable |
+| `PrivacyPreservingTransaction` encoding | Still excluded from `fuzz_encoding_roundtrip` because a real ZK receipt cannot be reconstructed in a fast fuzzing loop. Encoding is instead covered by the dedicated `fuzz_encoding_privacy_preserving` target |
+| `PrivacyPreservingTransaction` state transition (fake-receipt caveat) | Covered by `fuzz_privacy_preserving_state_transition`, which drives `execute_check_on_state` under `RISC0_DEV_MODE=1` using a synthesised *passing* proof (a dev-mode fake receipt). Because the proof is forced to pass, the circuit's balance-conservation guarantee is bypassed, so this target intentionally does **not** assert balance conservation — see `fuzz_props::privacy::synthesize_passing_proof` for the binding caveat |
 | `fuzz_validate_execute_consistency` new-account detection | If `execute_check_on_state` creates a brand-new account absent from both the genesis set and the diff, that state-widening will not be detected — full detection requires iterating all accounts in `V03State`, which the API does not currently expose |
-| LEZ version tracking | There is no submodule pin — `lez-fuzzing` reads `../logos-execution-zone` as checked out. Update that repo to a release tag or a tested commit, then run `just update-lez` (which does `git pull --ff-only`) and open a PR to bump it |
+| LEZ version tracking | CI pins the upstream revision in a single place — the `ref` input default of `.github/actions/checkout-lez`. PR-gating workflows build against that pinned SHA for reproducibility; the scheduled `lez-compat.yml` workflow overrides it with `main` to flag upstream drift. Locally, `lez-fuzzing` still reads `../logos-execution-zone` as checked out. To bump: update that repo to a tested commit, run `just update-lez` (which does `git pull --ff-only`), replace the SHA in the action, and open a PR |

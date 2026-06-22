@@ -299,7 +299,9 @@ fuzz-afl TARGET="" TIME="30":
             echo "Binary not found — building $t first…"
             just afl-build-target "$t"
         fi
-        timeout "$TIME" afl-fuzz -i "$CORPUS" -o "$OUTPUT" -- "$BINARY" || true
+        # Use afl-fuzz's own -V (run for N seconds then exit) instead of GNU
+        # `timeout`, which is not installed by default on macOS.
+        afl-fuzz -V "$TIME" -i "$CORPUS" -o "$OUTPUT" -- "$BINARY" || true
     }
     for t in "${TARGETS[@]}"; do
         echo "=== afl++ $t for ${TIME}s ==="
@@ -427,7 +429,9 @@ fuzz-afl-parallel TIME="30" JOBS="4":
             echo "Binary not found — building $t first…"
             just afl-build-target "$t"
         fi
-        timeout {{TIME}} afl-fuzz -i "$CORPUS" -o "$OUTPUT" -- "$BINARY" || true
+        # Use afl-fuzz's own -V (run for N seconds then exit) instead of GNU
+        # `timeout`, which is not installed by default on macOS.
+        afl-fuzz -V {{TIME}} -i "$CORPUS" -o "$OUTPUT" -- "$BINARY" || true
     }
     echo "Targets: ${#TARGETS[@]}  |  max parallel: {{JOBS}}  |  time per target: {{TIME}}s"
     for t in "${TARGETS[@]}"; do
@@ -462,7 +466,8 @@ afl-corpus-sync:
             [ -d "$QUEUE" ] || continue
             for f in "$QUEUE"/id:*; do
                 [ -f "$f" ] || continue
-                HASH=$(sha1sum "$f" | cut -d' ' -f1)
+                # sha1sum (GNU/Linux) is absent on stock macOS; fall back to shasum.
+                HASH=$( { sha1sum "$f" 2>/dev/null || shasum -a 1 "$f"; } | cut -d' ' -f1)
                 DEST_FILE="${DEST}/${HASH}"
                 if [ ! -f "$DEST_FILE" ]; then
                     cp "$f" "$DEST_FILE"

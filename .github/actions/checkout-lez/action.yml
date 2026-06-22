@@ -4,6 +4,18 @@ description: >
   symlinks it to the expected sibling path (../logos-execution-zone) so that
   Cargo path dependencies resolve correctly.
 
+inputs:
+  ref:
+    description: >
+      Git ref (SHA, tag, or branch) of logos-execution-zone to check out.
+      Defaults to the pinned, reviewed revision below — this single line is the
+      source of truth for the LEZ version every PR-gating workflow builds against.
+      To bump it: update ../logos-execution-zone to a tested commit, run
+      `just update-lez`, replace this SHA, and open a PR. The scheduled
+      lez-compat workflow overrides this with `main` to detect upstream drift.
+    required: false
+    default: dac429a94af932b0c827544fff8b9de85b83e6f3
+
 runs:
   using: composite
   steps:
@@ -11,8 +23,16 @@ runs:
       uses: actions/checkout@v4
       with:
         repository: logos-blockchain/logos-execution-zone
+        ref: ${{ inputs.ref }}
         path: logos-execution-zone
 
     - name: Symlink logos-execution-zone to sibling directory
       run: ln -s "$GITHUB_WORKSPACE/logos-execution-zone" "$GITHUB_WORKSPACE/../logos-execution-zone"
+      shell: bash
+
+    - name: Report pinned LEZ revision
+      run: |
+        echo "LEZ ref: ${{ inputs.ref }}"
+        echo "LEZ SHA: $(git -C "$GITHUB_WORKSPACE/logos-execution-zone" rev-parse HEAD)" \
+          | tee -a "$GITHUB_STEP_SUMMARY"
       shell: bash

@@ -241,8 +241,10 @@ pub fn arb_privacy_preserving_tx(
         }
     }
 
-    // ── public_post_states (length varied to exercise the apply/zip-truncation path) ──
-    let n_post = (u8::arbitrary(u)? as usize) % (public_account_ids.len() + 1);
+    // ── public_post_states ──
+    // Range 0..=len+3 so lengths can exceed the public-account count, exercising
+    // both the truncation path and the oversized/length-mismatch path.
+    let n_post = (u8::arbitrary(u)? as usize) % (public_account_ids.len() + 4);
     let public_post_states = std::iter::repeat_with(|| arb_account(u))
         .take(n_post)
         .collect::<ArbResult<Vec<_>>>()?;

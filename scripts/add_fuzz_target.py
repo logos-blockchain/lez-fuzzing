@@ -196,6 +196,15 @@ def main() -> None:
     print()
     print("  4. Run with libFuzzer:  just fuzz-one", target)
     print("     Run with AFL++:      just fuzz-afl", target)
+    print()
+    print("  5. This script only edits .github/workflows/fuzz.yml. Add the")
+    print("     target to the other enumeration sites too, then verify with:")
+    print("       python3 scripts/check_target_inventory.py")
+    print("     (the same check runs in CI and will fail the build on drift):")
+    print("       .github/workflows/fuzz-afl.yml")
+    print("       .github/workflows/mutants.yml")
+    print("       scripts/mutants-corpus-test.sh")
+    print("       README.md, docs/fuzzing.md")
 
 
 if __name__ == "__main__":

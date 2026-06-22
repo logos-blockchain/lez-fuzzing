@@ -6,7 +6,7 @@
 [Logos Execution Zone (LEZ)](https://github.com/logos-blockchain/logos-execution-zone) protocol.**
 
 [![Rust](https://img.shields.io/badge/rust-nightly-orange?logo=rust)](rust-toolchain.toml)
-[![Fuzzing](https://img.shields.io/badge/libFuzzer%20%C2%B7%20AFL%2B%2B-20%20targets-blue)](#-fuzz-targets)
+[![Fuzzing](https://img.shields.io/badge/libFuzzer%20%C2%B7%20AFL%2B%2B-21%20targets-blue)](#-fuzz-targets)
 [![Mutation testing](https://img.shields.io/badge/cargo--mutants-enabled-green)](.github/workflows/mutants.yml)
 [![License](https://img.shields.io/badge/license-MIT-lightgrey)](LICENSE-MIT)
 
@@ -31,7 +31,7 @@ lez-fuzzing/
 │       └── generators.rs       # Arbitrary / proptest strategies
 ├── fuzz/                   # cargo-fuzz crate (own [workspace] sentinel)
 │   ├── Cargo.toml
-│   ├── fuzz_targets/       # 20 targets total — see table below
+│   ├── fuzz_targets/       # 21 targets total — see table below
 │   │   ├── _template.rs    # Template for `just new-target`
 │   │   └── fuzz_*.rs
 │   └── corpus/             # Curated seed inputs (one dir per target)
@@ -130,6 +130,7 @@ just fuzz-props
 | 18 | `fuzz_privacy_preserving_witness` | `privacy_preserving_transaction::WitnessSet`: CorrectVerification (witness for msg A passes `signatures_are_valid_for(A)`) + MessageIsolation + SignerIdsMatchWitnessKeys |
 | 19 | `fuzz_encoding_privacy_preserving` | Privacy-preserving encoding: MessageEncodingRoundtrip + TxEncodingDeterministic/NonEmpty |
 | 20 | `fuzz_nullifier_set_roundtrip` | `NullifierSet` Borsh serialisation: NullifierSetRoundtrip (decode→encode identity for the hand-written impl) |
+| 21 | `fuzz_privacy_preserving_state_transition` | Path B — `NSSATransaction::PrivacyPreserving` through `execute_check_on_state` with a dev-mode passing proof: reaches commitment/nullifier checks 5–6 + `apply_state_diff`. Asserts no-panic, StateIsolationOnFailure, PrivateStateIsolationOnFailure, CommitmentInsertion, NonceIncrementCorrectness, PostStateApplied, ReplayRejection (balance conservation intentionally not asserted — the fake proof bypasses the circuit guarantee) |
 
 Each target lives at `fuzz/fuzz_targets/<name>.rs`.
 

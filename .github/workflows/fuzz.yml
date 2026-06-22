@@ -12,6 +12,14 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # ── Target-inventory gate: fail if any workflow/script/doc omits a target ────
+  target-inventory:
+    name: Target inventory in sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/check_target_inventory.py
+
   # ── Smoke fuzz: 60 s per target ─────────────────────────────────────────────
   smoke-fuzz:
     name: Smoke fuzz (${{ matrix.target }})
@@ -40,6 +48,7 @@ jobs:
           - fuzz_privacy_preserving_witness
           - fuzz_encoding_privacy_preserving
           - fuzz_nullifier_set_roundtrip
+          - fuzz_privacy_preserving_state_transition
     steps:
       - uses: actions/checkout@v4
 
@@ -228,6 +237,7 @@ jobs:
           - fuzz_privacy_preserving_witness
           - fuzz_encoding_privacy_preserving
           - fuzz_nullifier_set_roundtrip
+          - fuzz_privacy_preserving_state_transition
     steps:
       - uses: actions/checkout@v4
       - name: Checkout logos-execution-zone
@@ -300,7 +310,8 @@ jobs:
             fuzz_transaction_properties \
             fuzz_privacy_preserving_witness \
             fuzz_encoding_privacy_preserving \
-            fuzz_nullifier_set_roundtrip; do
+            fuzz_nullifier_set_roundtrip \
+            fuzz_privacy_preserving_state_transition; do
             echo "=== $target ===" | tee -a perf_baseline.txt
             cargo fuzz run "$target" -- -max_total_time=30 2>&1 \
               | grep -E "exec/s|execs_per_sec" | tail -1 | tee -a perf_baseline.txt

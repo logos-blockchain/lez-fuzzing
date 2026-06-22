@@ -280,6 +280,7 @@ fn arb_privacy_preserving_tx_generator_invariants() {
     let mut max_commitments = 0_usize;
     let mut max_nullifiers = 0_usize;
     let mut saw_empty_comm_nonempty_null = false;
+    let mut saw_oversize_post_states = false;
     let mut garbage = 0_usize;
     let mut saw_garbage = false;
 
@@ -308,14 +309,16 @@ fn arb_privacy_preserving_tx_generator_invariants() {
         // The signer count is drawn modulo `max_signers + 1`, so it can never exceed
         // the cap of 3 distinct signers.
         assert!(n_signers <= 3, "n_signers {n_signers} exceeds the cap of 3");
-        // Post-states are drawn modulo `public_account_ids.len() + 1`, so there is
-        // never a post-state without a corresponding public account.
+        // Post-states are drawn modulo `public_account_ids.len() + 4` (0..=len+3).
         assert!(
-            msg.public_post_states.len() <= msg.public_account_ids.len(),
-            "public_post_states {} exceeds public_account_ids {}",
+            msg.public_post_states.len() <= msg.public_account_ids.len() + 3,
+            "public_post_states {} exceeds public_account_ids + 3 ({})",
             msg.public_post_states.len(),
-            msg.public_account_ids.len()
+            msg.public_account_ids.len() + 3
         );
+        if msg.public_post_states.len() > msg.public_account_ids.len() {
+            saw_oversize_post_states = true;
+        }
         // At most 3 signers plus at most 3 extra ids (both deduplicated).
         assert!(
             msg.public_account_ids.len() <= 6,
@@ -405,6 +408,11 @@ fn arb_privacy_preserving_tx_generator_invariants() {
     assert!(
         saw_empty_comm_nonempty_null,
         "the generator never produced empty commitments with non-empty nullifiers"
+    );
+    // The oversized shape (more post-states than public account ids) must be reachable.
+    assert!(
+        saw_oversize_post_states,
+        "the generator never produced more post-states than public account ids"
     );
     // The garbage-proof branch (~1 in 8) must be reachable at all.
     assert!(saw_garbage, "the generator never produced a garbage proof");

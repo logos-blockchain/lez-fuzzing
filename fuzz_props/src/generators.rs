@@ -84,6 +84,9 @@ pub fn arbitrary_fuzz_state(u: &mut Unstructured<'_>) -> arbitrary::Result<Vec<F
 ///
 /// Self-transfers (`from_idx == to_idx`) are allowed since they are a useful
 /// edge case (balance should remain unchanged).
+///
+/// The `nonce`/`amount` draw is biased toward valid inputs so the success path
+/// is actually reached, with a minority branch for the rejection paths.
 pub fn arb_fuzz_native_transfer(
     u: &mut Unstructured<'_>,
     accounts: &[FuzzAccount],
@@ -93,11 +96,19 @@ pub fn arb_fuzz_native_transfer(
     }
     let from_idx = (u8::arbitrary(u)? as usize) % accounts.len();
     let to_idx = (u8::arbitrary(u)? as usize) % accounts.len();
-    let nonce = u128::arbitrary(u)?;
-    let amount = u128::arbitrary(u)?;
 
     let from = &accounts[from_idx];
     let to = &accounts[to_idx];
+
+    let (nonce, amount) = if bool::arbitrary(u)? {
+        // Biased valid: nonce near the genesis value, amount within balance.
+        let nonce = u128::from(u8::arbitrary(u)?) % 4; // 0..=3
+        let amount = u128::arbitrary(u)? % from.balance.saturating_add(1); // 0..=balance
+        (nonce, amount)
+    } else {
+        // Adversarial: full range drives the rejection paths.
+        (u128::arbitrary(u)?, u128::arbitrary(u)?)
+    };
 
     Ok(
         common::test_utils::create_transaction_native_token_transfer(
