@@ -270,6 +270,8 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
       - run: cargo test -p fuzz_props --release
+      - name: Run tests which require RISC0_DEV_MODE off.
+        run: env -u RISC0_DEV_MODE cargo test -p fuzz_props --release synthesized_proof_is_rejected_without_dev_mode
 
   # ── Performance baseline (nightly only) ─────────────────────────────────────
   perf-baseline:
