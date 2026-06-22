@@ -7,8 +7,6 @@ name: LEZ upstream compatibility
 on:
   schedule:
     - cron: "0 4 * * *"
-  push:
-    branches: [ test-privacy-features ]
   workflow_dispatch:
 
 env:
