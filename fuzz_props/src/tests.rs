@@ -1,5 +1,5 @@
-mod arbitrary_types_test;
-mod generators_test;
+mod arbitrary_types;
+mod generators;
 mod invariants;
 mod privacy;
 mod replay_proptest;

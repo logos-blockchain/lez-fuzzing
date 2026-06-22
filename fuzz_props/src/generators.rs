@@ -74,6 +74,21 @@ pub fn arbitrary_fuzz_state(u: &mut Unstructured<'_>) -> arbitrary::Result<Vec<F
     .collect()
 }
 
+/// Reduce raw fuzzer draws into a *biased-valid* `(nonce, amount)` pair.
+///
+/// The nonce is mapped into `0..=3` (near the genesis value) and the amount into
+/// `0..=balance`, so the success path is actually reached. Extracted as a pure
+/// function so the reduction arithmetic is unit-testable.
+pub(crate) fn biased_valid_nonce_amount(
+    nonce_byte: u8,
+    amount_raw: u128,
+    balance: u128,
+) -> (u128, u128) {
+    let nonce = u128::from(nonce_byte) % 4; // 0..=3
+    let amount = amount_raw % balance.saturating_add(1); // 0..=balance
+    (nonce, amount)
+}
+
 /// Generate a native-transfer [`LeeTransaction`] between two accounts chosen
 /// from `accounts`.
 ///
@@ -102,9 +117,7 @@ pub fn arb_fuzz_native_transfer(
 
     let (nonce, amount) = if bool::arbitrary(u)? {
         // Biased valid: nonce near the genesis value, amount within balance.
-        let nonce = u128::from(u8::arbitrary(u)?) % 4; // 0..=3
-        let amount = u128::arbitrary(u)? % from.balance.saturating_add(1); // 0..=balance
-        (nonce, amount)
+        biased_valid_nonce_amount(u8::arbitrary(u)?, u128::arbitrary(u)?, from.balance)
     } else {
         // Adversarial: full range drives the rejection paths.
         (u128::arbitrary(u)?, u128::arbitrary(u)?)
