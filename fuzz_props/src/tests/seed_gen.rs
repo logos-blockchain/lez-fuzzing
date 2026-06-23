@@ -11,9 +11,9 @@ fn generate_seeds() {
         .expect("fuzz_props is one level below the workspace root");
 
     let targets = [
-        "fuzz/corpus/fuzz_transaction_decoding/seed_empty_tx",
-        "fuzz/corpus/fuzz_stateless_verification/seed_empty_tx",
-        "fuzz/corpus/fuzz_state_transition/seed_empty_tx",
+        "corpus/libfuzz/fuzz_transaction_decoding/seed_empty_tx",
+        "corpus/libfuzz/fuzz_stateless_verification/seed_empty_tx",
+        "corpus/libfuzz/fuzz_state_transition/seed_empty_tx",
     ];
     for rel in &targets {
         let p = workspace_root.join(rel);
