@@ -1,0 +1,17 @@
+name: Set up libFuzzer toolchain
+description: >
+  Install the Rust nightly toolchain (with llvm-tools-preview, required by
+  cargo-fuzz and llvm-cov) and cargo-fuzz itself. The repository and
+  logos-execution-zone must already be checked out before this runs.
+
+runs:
+  using: composite
+  steps:
+    - name: Install Rust nightly + llvm-tools-preview
+      uses: dtolnay/rust-toolchain@nightly
+      with:
+        components: llvm-tools-preview
+
+    - name: Install cargo-fuzz
+      shell: bash
+      run: cargo install cargo-fuzz

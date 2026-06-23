@@ -80,25 +80,8 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install AFL++ v4.40c from source
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -y \
-            build-essential python3-dev automake cmake \
-            flex bison libglib2.0-dev libpixman-1-dev \
-            python3-setuptools ninja-build
-          git clone --depth 1 --branch v4.40c \
-            https://github.com/AFLplusplus/AFLplusplus /tmp/aflplusplus
-          cd /tmp/aflplusplus
-          make distrib
-          sudo make install
-          afl-fuzz --version
-
-      - name: Install Rust (stable)
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install cargo-afl
-        run: cargo install cargo-afl --locked
+      - name: Set up AFL++ toolchain
+        uses: ./.github/actions/setup-afl
 
       - name: Build fuzz target
         run: |

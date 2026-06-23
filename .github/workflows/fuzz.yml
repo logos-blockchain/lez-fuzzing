@@ -55,11 +55,6 @@ jobs:
       - name: Checkout logos-execution-zone
         uses: ./.github/actions/checkout-lez
 
-      - name: Install Rust nightly (required by cargo-fuzz)
-        uses: dtolnay/rust-toolchain@nightly
-        with:
-          components: llvm-tools-preview
-
       - name: Cache cargo registry
         uses: actions/cache@v4
         with:
@@ -74,8 +69,7 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz
+      - uses: ./.github/actions/setup-libfuzzer
 
       - name: Build fuzz target
         run: cargo fuzz build ${{ matrix.target }}
@@ -242,14 +236,11 @@ jobs:
       - uses: actions/checkout@v4
       - name: Checkout logos-execution-zone
         uses: ./.github/actions/checkout-lez
-      - uses: dtolnay/rust-toolchain@nightly
-        with:
-          components: llvm-tools-preview
       - name: Install logos-blockchain-circuits
         uses: ./logos-execution-zone/.github/actions/install-logos-blockchain-circuits
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-      - run: cargo install cargo-fuzz
+      - uses: ./.github/actions/setup-libfuzzer
       - name: Reproduce corpus
         run: |
           mkdir -p corpus/libfuzz/${{ matrix.target }}
@@ -282,14 +273,11 @@ jobs:
       - uses: actions/checkout@v4
       - name: Checkout logos-execution-zone
         uses: ./.github/actions/checkout-lez
-      - uses: dtolnay/rust-toolchain@nightly
-        with:
-          components: llvm-tools-preview
       - name: Install logos-blockchain-circuits
         uses: ./logos-execution-zone/.github/actions/install-logos-blockchain-circuits
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-      - run: cargo install cargo-fuzz
+      - uses: ./.github/actions/setup-libfuzzer
       - name: Measure throughput (30 s per target)
         run: |
           for target in \

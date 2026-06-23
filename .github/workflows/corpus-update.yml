@@ -1,0 +1,314 @@
+name: Corpus update
+
+# Fully-automated weekly corpus maintenance.
+#
+#   Every Sunday, for each fuzz target (libFuzzer + AFL++ lanes, in parallel):
+#     Phase 1 — GROW:     fuzz for 30 min starting from the checked-in corpus,
+#                         keeping every new input it discovers.
+#     Phase 2 — MINIMISE: re-minimise that target's *entire* corpus
+#                         (cmin / afl-cmin) so dominated inputs are dropped and
+#                         the tree never balloons.
+#
+#   Corpus minimisation is per-target by construction (each target has its own
+#   corpus dir + its own instrumented binary), so running Phase 2 right after
+#   Phase 1 inside the same job is equivalent to a separate global minimise pass
+#   — without shipping the whole corpus between jobs.
+#
+#   Every per-target result is uploaded as an artifact; a single `commit` job
+#   aggregates them into ONE pull request. Matrix jobs never push, so they never
+#   race on the branch. Note: a PR opened with the default GITHUB_TOKEN does NOT
+#   retrigger PR-gating workflows (GitHub's loop guard) — desired for a chore PR.
+
+on:
+  schedule:
+    - cron: "0 3 * * 0"     # Sundays, 03:00 UTC
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: "Seconds to fuzz per target in the grow phase"
+        required: false
+        default: "1800"
+      minimize_only:
+        description: "Skip fuzzing; only minimise the existing corpus"
+        type: boolean
+        default: false
+
+env:
+  RISC0_DEV_MODE: "1"
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+jobs:
+  # ── Resolve the target matrix + run parameters ────────────────────────────────
+  config:
+    name: Resolve matrix & config
+    runs-on: ubuntu-latest
+    outputs:
+      targets: ${{ steps.targets.outputs.targets }}
+      duration: ${{ steps.cfg.outputs.duration }}
+      minimize_only: ${{ steps.cfg.outputs.minimize_only }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: targets
+        uses: ./.github/actions/resolve-targets
+      - id: cfg
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            DUR="${{ inputs.duration }}"
+            MIN="${{ inputs.minimize_only }}"
+          else
+            DUR="1800"      # scheduled weekly grow: 30 minutes per target
+            MIN="false"
+          fi
+          [ -n "$DUR" ] || DUR="1800"
+          [ -n "$MIN" ] || MIN="false"
+          echo "duration=$DUR"          >> "$GITHUB_OUTPUT"
+          echo "minimize_only=$MIN"     >> "$GITHUB_OUTPUT"
+          echo "duration=${DUR}s minimize_only=${MIN}"
+
+  # ── libFuzzer lane: grow 30 min, then minimise ────────────────────────────────
+  libfuzz:
+    name: "libFuzzer — ${{ matrix.target }}"
+    needs: config
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.config.outputs.targets) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/checkout-lez
+      - name: Install logos-blockchain-circuits
+        uses: ./logos-execution-zone/.github/actions/install-logos-blockchain-circuits
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: ./.github/actions/setup-libfuzzer
+
+      - name: Build fuzz target
+        run: cargo fuzz build ${{ matrix.target }}
+
+      - name: "Phase 1 — grow (fuzz ${{ needs.config.outputs.duration }}s)"
+        if: needs.config.outputs.minimize_only != 'true'
+        run: |
+          T="${{ matrix.target }}"
+          mkdir -p "corpus/libfuzz/$T"
+          before=$(ls "corpus/libfuzz/$T" | wc -l)
+          cargo fuzz run "$T" "corpus/libfuzz/$T" -- \
+            -max_total_time=${{ needs.config.outputs.duration }} -jobs=2 -workers=2
+          echo "grew corpus/libfuzz/$T: $before → $(ls "corpus/libfuzz/$T" | wc -l) inputs"
+
+      - name: "Phase 2 — minimise entire corpus (cmin)"
+        run: |
+          T="${{ matrix.target }}"
+          mkdir -p "corpus/libfuzz/$T"
+          before=$(ls "corpus/libfuzz/$T" | wc -l)
+          cargo fuzz cmin "$T" "corpus/libfuzz/$T"
+          echo "minimised corpus/libfuzz/$T: $before → $(ls "corpus/libfuzz/$T" | wc -l) inputs"
+
+      - name: Upload corpus
+        uses: actions/upload-artifact@v4
+        with:
+          name: libfuzz-corpus-${{ matrix.target }}
+          path: corpus/libfuzz/${{ matrix.target }}/
+          if-no-files-found: ignore
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: libfuzz-crash-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}/
+          if-no-files-found: ignore
+
+  # ── AFL++ lane: grow 30 min, then minimise ────────────────────────────────────
+  afl:
+    name: "AFL++ — ${{ matrix.target }}"
+    needs: config
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.config.outputs.targets) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/checkout-lez
+      - name: Install logos-blockchain-circuits
+        uses: ./logos-execution-zone/.github/actions/install-logos-blockchain-circuits
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: ./.github/actions/setup-afl
+
+      - name: Build AFL++ target
+        run: |
+          cargo afl build \
+            --manifest-path fuzz/Cargo.toml \
+            --no-default-features \
+            --features fuzzer-afl \
+            --release \
+            --bin ${{ matrix.target }}
+
+      - name: Prepare seed corpus
+        if: needs.config.outputs.minimize_only != 'true'
+        run: |
+          T="${{ matrix.target }}"
+          SEEDS="afl-seeds/$T"
+          mkdir -p "$SEEDS"
+          for src in "corpus/libfuzz/$T" "corpus/afl/$T"; do
+            [ -d "$src" ] || continue
+            for f in "$src"/*; do [ -f "$f" ] && cp -n "$f" "$SEEDS/" 2>/dev/null || true; done
+          done
+          [ -n "$(ls -A "$SEEDS")" ] || echo -n "seed" > "$SEEDS/default_seed"
+          echo "Seed inputs: $(ls "$SEEDS" | wc -l)"
+
+      - name: "Phase 1 — grow (AFL++ ${{ needs.config.outputs.duration }}s)"
+        if: needs.config.outputs.minimize_only != 'true'
+        env:
+          AFL_SKIP_CPUFREQ: "1"
+          AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES: "1"
+        run: |
+          T="${{ matrix.target }}"
+          mkdir -p "afl-output/$T"
+          set +e
+          timeout ${{ needs.config.outputs.duration }} \
+            afl-fuzz -i "afl-seeds/$T" -o "afl-output/$T" -- "fuzz/target/release/$T"
+          rc=$?
+          set -e
+          # 124 = SIGALRM from timeout (expected end); 0 = clean exit; else real failure
+          [ $rc -eq 0 ] || [ $rc -eq 124 ] || exit $rc
+
+      - name: Sync new queue entries into corpus/afl
+        if: needs.config.outputs.minimize_only != 'true'
+        run: |
+          T="${{ matrix.target }}"
+          DEST="corpus/afl/$T"
+          mkdir -p "$DEST"
+          added=0
+          for instance_dir in "afl-output/$T"/*/; do
+            QUEUE="${instance_dir}queue"
+            [ -d "$QUEUE" ] || continue
+            for f in "$QUEUE"/id:*; do
+              [ -f "$f" ] || continue
+              HASH=$(sha1sum "$f" | cut -d' ' -f1)
+              if [ ! -f "$DEST/$HASH" ]; then
+                cp "$f" "$DEST/$HASH"
+                added=$((added + 1))
+              fi
+            done
+          done
+          echo "grew corpus/afl/$T → $(ls "$DEST" | wc -l) inputs (+$added new)"
+
+      - name: "Phase 2 — minimise entire corpus (afl-cmin)"
+        env:
+          AFL_SKIP_CPUFREQ: "1"
+          AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES: "1"
+        run: |
+          T="${{ matrix.target }}"
+          SRC="corpus/afl/$T"
+          if [ ! -d "$SRC" ] || [ -z "$(ls -A "$SRC" 2>/dev/null)" ]; then
+            echo "corpus/afl/$T is empty — nothing to minimise."
+            exit 0
+          fi
+          before=$(ls "$SRC" | wc -l)
+          # afl-cmin can fail on pathological corpora; fall back to leaving SRC as-is.
+          if afl-cmin -i "$SRC" -o "afl-cmin/$T" -- "fuzz/target/release/$T"; then
+            rm -rf "$SRC"
+            mkdir -p "$SRC"
+            cp "afl-cmin/$T"/* "$SRC"/ 2>/dev/null || true
+          else
+            echo "afl-cmin failed — keeping corpus/afl/$T unchanged."
+          fi
+          echo "minimised corpus/afl/$T: $before → $(ls "$SRC" | wc -l) inputs"
+
+      - name: Upload corpus
+        uses: actions/upload-artifact@v4
+        with:
+          name: afl-corpus-${{ matrix.target }}
+          path: corpus/afl/${{ matrix.target }}/
+          if-no-files-found: ignore
+
+      - name: Package AFL findings on failure
+        if: failure()
+        run: |
+          T="${{ matrix.target }}"
+          # AFL filenames contain colons (forbidden by upload-artifact) — tar them.
+          tar -czf "afl-findings-$T.tar.gz" -C afl-output "$T" 2>/dev/null \
+            || tar -czf "afl-findings-$T.tar.gz" -T /dev/null
+      - name: Upload AFL findings on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: afl-crash-${{ matrix.target }}
+          path: afl-findings-${{ matrix.target }}.tar.gz
+          if-no-files-found: ignore
+
+  # ── Aggregate every per-target corpus into ONE pull request ───────────────────
+  commit:
+    name: Open corpus update PR
+    needs: [config, libfuzz, afl]
+    # Run as long as config succeeded; individual matrix failures (fail-fast:false)
+    # must not block the PR for the targets that did succeed.
+    if: ${{ !cancelled() && needs.config.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download corpus artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: corpus-artifacts
+          pattern: "*-corpus-*"     # libfuzz-corpus-* and afl-corpus-* only
+          merge-multiple: false
+        continue-on-error: true
+
+      - name: Apply corpus deltas to the working tree
+        run: |
+          shopt -s nullglob
+          applied=0
+          # Replace per-target dirs only for targets that produced an artifact, so a
+          # crashed/skipped target never has its checked-in corpus deleted. Replacing
+          # (rm + repopulate) lets cmin-driven deletions show up in the PR diff.
+          for d in corpus-artifacts/libfuzz-corpus-*; do
+            t="${d##*/libfuzz-corpus-}"
+            rm -rf "corpus/libfuzz/$t"; mkdir -p "corpus/libfuzz/$t"
+            cp "$d"/* "corpus/libfuzz/$t/" 2>/dev/null || true
+            applied=$((applied + 1))
+          done
+          for d in corpus-artifacts/afl-corpus-*; do
+            t="${d##*/afl-corpus-}"
+            rm -rf "corpus/afl/$t"; mkdir -p "corpus/afl/$t"
+            cp "$d"/* "corpus/afl/$t/" 2>/dev/null || true
+            applied=$((applied + 1))
+          done
+          echo "Applied corpus for $applied target lane(s)."
+          echo "Changed files: $(git status --porcelain corpus | wc -l)"
+
+      - name: Create or update pull request
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          base: main
+          branch: automation/corpus-update
+          delete-branch: true
+          add-paths: |
+            corpus/libfuzz/**
+            corpus/afl/**
+          commit-message: "chore: weekly corpus update (grow + minimise)"
+          title: "chore: automated weekly corpus update"
+          labels: |
+            automation
+            corpus
+          body: |
+            Automated weekly corpus update produced by
+            `.github/workflows/corpus-update.yml` (run
+            [#${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})).
+
+            Per target, in parallel: **Phase 1** fuzzed 30 min (libFuzzer + AFL++),
+            **Phase 2** re-minimised the entire corpus (`cmin` / `afl-cmin`).
+
+            Per-target corpora that crashed or were skipped are left untouched.
+            Review the diff, confirm CI is green, and merge.
