@@ -16,8 +16,8 @@ name: Corpus update
 #
 #   Every per-target result is uploaded as an artifact; a single `commit` job
 #   aggregates them into ONE pull request. Matrix jobs never push, so they never
-#   race on the branch. Note: a PR opened with the default GITHUB_TOKEN does NOT
-#   retrigger PR-gating workflows (GitHub's loop guard) — desired for a chore PR.
+#   race on the branch. The PR is opened with a classic PAT (secret
+#   CORPUS_BOT_TOKEN).
 
 on:
   schedule:
@@ -292,7 +292,7 @@ jobs:
       - name: Create or update pull request
         uses: peter-evans/create-pull-request@v6
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.CORPUS_BOT_TOKEN }}
           base: main
           branch: automation/corpus-update
           delete-branch: true
