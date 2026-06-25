@@ -40,7 +40,6 @@ use std::collections::HashSet;
 use arbitrary::{Arbitrary, Unstructured};
 use common::transaction::{LeeTransaction, clock_invocation};
 use fuzz_props::generators::{arb_fuzz_native_transfer, arbitrary_fuzz_state, arbitrary_transaction};
-use nssa::V03State;
 
 fuzz_props::fuzz_entry!(|data: &[u8]| {
     let mut u = Unstructured::new(data);
@@ -67,7 +66,7 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
     let timestamp: u64 = u64::arbitrary(&mut u).unwrap_or(1_000);
 
     // Shared base state — cloned once for each pipeline.
-    let base_state = V03State::new_with_genesis_accounts(&init_accs, vec![], 0);
+    let base_state = fuzz_props::genesis::genesis_state(&init_accs, vec![]);
 
     // Track all account IDs touched by accepted transactions so we can compare
     // them across both pipelines after the full block is applied.

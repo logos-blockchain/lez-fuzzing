@@ -49,6 +49,8 @@ nssa_core     = { path = "../../logos-execution-zone/lee/state_machine/core", pa
 common        = { path = "../../logos-execution-zone/lez/common" }
 fuzz_props    = { path = "../fuzz_props" }
 testnet_initial_state = { path = "../../logos-execution-zone/lez/testnet_initial_state" }
+programs       = { path = "../../logos-execution-zone/lez/programs" }
+system_accounts = { path = "../../logos-execution-zone/lez/system_accounts" }
 
 [profile.release]
 debug = true

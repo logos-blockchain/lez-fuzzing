@@ -68,6 +68,7 @@
 
 pub mod arbitrary_types;
 pub mod generators;
+pub mod genesis;
 pub mod invariants;
 pub mod privacy;
 

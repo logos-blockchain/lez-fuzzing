@@ -9,10 +9,9 @@ use common::transaction::LeeTransaction;
 use fuzz_props::arbitrary_types::ArbPrivateKey;
 use fuzz_props::generators::{arb_fuzz_native_transfer, arbitrary_fuzz_state};
 use nssa::{
-    AccountId, PrivateKey, PublicKey, ValidatedStateDiff, V03State,
+    AccountId, PrivateKey, PublicKey, ValidatedStateDiff,
     public_transaction::{Message, WitnessSet},
     PublicTransaction,
-    program::Program,
 };
 use nssa_core::account::Nonce;
 
@@ -33,7 +32,7 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
 
         let nonces = vec![Nonce::from(0_u128), Nonce::from(0_u128)];
         let message = Message::try_new(
-            Program::authenticated_transfer_program().id(),
+            programs::authenticated_transfer().id(),
             vec![addr1, addr2],
             nonces,
             1337_u64,
@@ -139,7 +138,7 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
         if signer_addr != other1 && signer_addr != other2 {
             let nonces = vec![Nonce::from(0_u128)];
             if let Ok(msg) = Message::try_new(
-                Program::authenticated_transfer_program().id(),
+                programs::authenticated_transfer().id(),
                 vec![other1, other2],
                 nonces,
                 7_u64,
@@ -173,7 +172,7 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
             .iter()
             .map(|a| (a.account_id, a.balance))
             .collect();
-        let state = V03State::new_with_genesis_accounts(&init_accs, vec![], 0);
+        let state = fuzz_props::genesis::genesis_state(&init_accs, vec![]);
 
         let Ok(tx) = arb_fuzz_native_transfer(&mut u, &fuzz_accs) else {
             return;
@@ -235,7 +234,7 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
 
             let nonces = vec![Nonce::from(0_u128)];
             if let Ok(msg) = Message::try_new(
-                Program::authenticated_transfer_program().id(),
+                programs::authenticated_transfer().id(),
                 vec![addr],
                 nonces,
                 42_u64,

@@ -9,7 +9,7 @@ fn make_test_state() -> V03State {
         .iter()
         .map(|(id, _)| (*id, 1_000_000_u128))
         .collect();
-    V03State::new_with_genesis_accounts(&init_accs, vec![], 0)
+    crate::genesis::genesis_state(&init_accs, vec![])
 }
 
 proptest! {

@@ -12,7 +12,7 @@
 //! compute_digest_for_path(c, proof)         → canonical leaf→root recomputation
 //! ```
 //!
-//! Inserting commitments via `V03State::new_with_genesis_accounts` therefore
+//! Inserting commitments via `fuzz_props::genesis::genesis_state` therefore
 //! drives `insert`, `root`/`root_index`, `get_authentication_path_for`, `depth`,
 //! `get_node`/`set_node`, and — once the count exceeds the genesis capacity (32)
 //! — `reallocate_to_double_capacity` and `prev_power_of_two`.
@@ -47,7 +47,6 @@
 
 use std::collections::HashSet;
 
-use nssa::V03State;
 use nssa_core::{
     Commitment, Nullifier,
     account::{Account, AccountId},
@@ -78,7 +77,7 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
     let commitments: Vec<Commitment> = pairs.iter().map(|(c, _)| c.clone()).collect();
 
     // Genesis inserts DUMMY_COMMITMENT at index 0, then our commitments at 1..=N.
-    let state = V03State::new_with_genesis_accounts(&[], pairs, 0);
+    let state = fuzz_props::genesis::genesis_state(&[], pairs);
     let digest = state.commitment_set_digest();
 
     let mut indices: Vec<usize> = Vec::with_capacity(commitments.len());

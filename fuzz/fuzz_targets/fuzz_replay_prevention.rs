@@ -25,7 +25,6 @@
 use arbitrary::{Arbitrary, Unstructured};
 use fuzz_props::generators::{arb_fuzz_native_transfer, arbitrary_fuzz_state, arbitrary_transaction};
 use fuzz_props::invariants::{BalanceSnapshot, NonceSnapshot, assert_tx_execution_invariants};
-use nssa::V03State;
 
 fuzz_props::fuzz_entry!(|data: &[u8]| {
     let mut u = Unstructured::new(data);
@@ -39,7 +38,7 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
         .iter()
         .map(|a| (a.account_id, a.balance))
         .collect();
-    let mut state = V03State::new_with_genesis_accounts(&init_accs, vec![], 0);
+    let mut state = fuzz_props::genesis::genesis_state(&init_accs, vec![]);
 
     // Mix correlated transactions (correctly signed, referencing a fuzz account)
     // with random ones.  Correlated transactions have a higher chance of being

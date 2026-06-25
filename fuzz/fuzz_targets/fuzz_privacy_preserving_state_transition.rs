@@ -36,7 +36,7 @@ use fuzz_props::invariants::{
     StateIsolationOnFailure, assert_nonce_increment_correctness, assert_replay_rejection,
 };
 use fuzz_props::privacy::arb_privacy_preserving_tx;
-use nssa::{AccountId, V03State};
+use nssa::AccountId;
 
 fuzz_props::fuzz_entry!(|data: &[u8]| {
     let mut u = Unstructured::new(data);
@@ -50,7 +50,7 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
         .iter()
         .map(|a| (a.account_id, a.balance))
         .collect();
-    let mut state = V03State::new_with_genesis_accounts(&init_accs, vec![], 0);
+    let mut state = fuzz_props::genesis::genesis_state(&init_accs, vec![]);
 
     // Apply a short sequence so multi-transaction state evolution (commitment growth,
     // signer-nonce advance) is exercised. Each transaction's proof is synthesised against
