@@ -36,11 +36,6 @@ jobs:
       - name: Install stable Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install logos-blockchain-circuits
-        uses: ./logos-execution-zone/.github/actions/install-logos-blockchain-circuits
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Cache cargo registry
         uses: actions/cache@v4
         with:
@@ -126,11 +121,6 @@ jobs:
         uses: dtolnay/rust-toolchain@nightly
         with:
           components: llvm-tools-preview
-
-      - name: Install logos-blockchain-circuits
-        uses: ./logos-execution-zone/.github/actions/install-logos-blockchain-circuits
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Cache cargo registry
         uses: actions/cache@v4

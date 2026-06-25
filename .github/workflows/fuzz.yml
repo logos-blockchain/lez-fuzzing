@@ -64,11 +64,6 @@ jobs:
             target
           key: fuzz-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Install logos-blockchain-circuits
-        uses: ./logos-execution-zone/.github/actions/install-logos-blockchain-circuits
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
       - uses: ./.github/actions/setup-libfuzzer
 
       - name: Build fuzz target
@@ -236,10 +231,6 @@ jobs:
       - uses: actions/checkout@v4
       - name: Checkout logos-execution-zone
         uses: ./.github/actions/checkout-lez
-      - name: Install logos-blockchain-circuits
-        uses: ./logos-execution-zone/.github/actions/install-logos-blockchain-circuits
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: ./.github/actions/setup-libfuzzer
       - name: Reproduce corpus
         run: |
@@ -256,10 +247,6 @@ jobs:
       - name: Checkout logos-execution-zone
         uses: ./.github/actions/checkout-lez
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install logos-blockchain-circuits
-        uses: ./logos-execution-zone/.github/actions/install-logos-blockchain-circuits
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
       - run: cargo test -p fuzz_props --release
       - name: Run tests which require RISC0_DEV_MODE off.
         run: env -u RISC0_DEV_MODE cargo test -p fuzz_props --release synthesized_proof_is_rejected_without_dev_mode
@@ -273,10 +260,6 @@ jobs:
       - uses: actions/checkout@v4
       - name: Checkout logos-execution-zone
         uses: ./.github/actions/checkout-lez
-      - name: Install logos-blockchain-circuits
-        uses: ./logos-execution-zone/.github/actions/install-logos-blockchain-circuits
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: ./.github/actions/setup-libfuzzer
       - name: Measure throughput (30 s per target)
         run: |
