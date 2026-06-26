@@ -1,8 +1,8 @@
 use arbitrary::{Arbitrary, Unstructured};
 use common::{block::HashableBlockData, transaction::LeeTransaction};
-use nssa::{AccountId, PrivateKey};
+use nssa::{AccountId, PrivateKey, PublicKey};
 
-use crate::arbitrary_types::{ArbAccountId, ArbLeeTransaction, ArbPrivateKey};
+use crate::arbitrary_types::{ArbLeeTransaction, ArbPrivateKey};
 use proptest::prelude::*;
 use testnet_initial_state::initial_pub_accounts_private_keys;
 
@@ -31,16 +31,29 @@ pub fn signer_account_ids(tx: &common::transaction::LeeTransaction) -> Vec<nssa:
     }
 }
 
+/// The public-account [`AccountId`] that a transaction signed with `key` will have as its
+/// signer — i.e. exactly what the validator derives from the witness set.
+///
+/// Centralises the `AccountId::from(&PublicKey::new_from_private_key(key))` derivation that
+/// funded-account generation and the privacy synthesiser both depend on, so the funded
+/// account and its signer never drift apart again.
+#[must_use]
+pub fn account_id_for_key(key: &PrivateKey) -> AccountId {
+    AccountId::from(&PublicKey::new_from_private_key(key))
+}
+
 // ── Fuzz-driven state generation ─────────────────────────────────────────────
 
-/// An account with an arbitrary identifier, balance, and private key,
-/// generated entirely from unstructured fuzzer bytes.
+/// An account with a fuzz-driven balance and private key, plus the [`AccountId`]
+/// **derived from that key**.
 ///
-/// Using random account IDs (rather than the fixed `testnet_initial_state` set)
-/// exposes state-dependent bugs that only manifest with specific account shapes —
-/// for example: zero balance, [`u128::MAX`] balance, or a nonce at the
-/// wrap-around boundary.  The [`PrivateKey`] field lets downstream generators
-/// produce correctly-signed transfers referencing accounts present in this state.
+/// Deriving `account_id` from `private_key` (rather than drawing it independently)
+/// is what makes the funded account and its signer the *same* account: a transfer
+/// signed by `private_key` is then authorized to spend `account_id`, so downstream
+/// generators like [`arb_fuzz_native_transfer`] can actually reach the **successful**
+/// state-transition path instead of always being rejected as unauthorized. The key
+/// is still fuzz-driven, so account shapes (zero balance, [`u128::MAX`] balance,
+/// nonce wrap-around) remain controlled by the fuzzer.
 pub struct FuzzAccount {
     pub account_id: AccountId,
     pub balance: u128,
@@ -62,12 +75,16 @@ pub struct FuzzAccount {
 pub fn arbitrary_fuzz_state(u: &mut Unstructured<'_>) -> arbitrary::Result<Vec<FuzzAccount>> {
     let n = ((u8::arbitrary(u)? as usize) % 8) + 1; // 1..=8
     std::iter::repeat_with(|| {
+        let private_key = ArbPrivateKey::arbitrary(u)?.0;
+        // Derive the account id from the key so the funded account *is* the signer;
+        // otherwise every "biased-valid" transfer is unauthorized and rejected.
+        let account_id = account_id_for_key(&private_key);
         Ok(FuzzAccount {
-            account_id: ArbAccountId::arbitrary(u)?.0,
+            account_id,
             // Divide by 8 so the sum of 8 accounts is at most u128::MAX, preventing
             // false-positive checked_add panics that would mask real inflation bugs.
             balance: u128::arbitrary(u)? / 8,
-            private_key: ArbPrivateKey::arbitrary(u)?.0,
+            private_key,
         })
     })
     .take(n)
