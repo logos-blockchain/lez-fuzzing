@@ -49,22 +49,37 @@ fn signer_ids_contains_the_signing_account() {
     );
 }
 
+/// A buffer whose bytes are all distinct within any 80-byte window (the per-account
+/// stride: 32 id + 16 balance + 32 key), so each generated account gets a distinct ID
+/// and the dedup pass in `arbitrary_fuzz_state` does not collapse the count.  Using
+/// `buf[i] = i` works because two account-ID windows starting at offsets `a` and `b`
+/// (both `< 256`) are equal only when `a ≡ b (mod 256)`, which never holds for the
+/// `1 + j*80` offsets of the first eight accounts.
+fn distinct_byte_buffer(len: usize) -> Vec<u8> {
+    (0_u8..=255).cycle().take(len).collect()
+}
+
 #[test]
-fn fuzz_state_never_empty() {
-    let buf = vec![0_u8; 1000];
+fn fuzz_state_never_empty_for_distinct_ids() {
+    // Selector byte 0 -> (0 % 8) + 1 = 1 account; distinct bytes keep it from being
+    // deduped away.  (An all-duplicate or all-reserved draw may legitimately return
+    // 0 accounts now — see `fuzz_state_dedups_account_ids` — so non-emptiness is only
+    // asserted for an input that yields distinct, non-reserved IDs.)
+    let buf = distinct_byte_buffer(1000);
     let mut u = Unstructured::new(&buf);
     let accounts = arbitrary_fuzz_state(&mut u).expect("should succeed");
     assert!(
         !accounts.is_empty(),
-        "arbitrary_fuzz_state must return at least 1 account (n = 1..=8); \
+        "arbitrary_fuzz_state must return at least 1 account for distinct-ID input; \
          returned 0 \u{2014} mutation: `+ 1` replaced by `* 1` or `Ok(vec![])`"
     );
 }
 
 #[test]
 fn fuzz_state_count_uses_modulo_not_div_or_add() {
-    // fill_buffer reads from the front; the first byte is the n-selector.
-    let mut buf = vec![0_u8; 1000];
+    // fill_buffer reads from the front; the first byte is the n-selector.  Distinct
+    // bytes give every account a unique ID so the count is not masked by dedup.
+    let mut buf = distinct_byte_buffer(1000);
     buf[0] = 8; // selector byte: 8 % 8 = 0, +1 -> n=1  |  8 / 8 = 1, +1 -> n=2  |  8 + 8 = 16, +1 -> n=17
     let mut u = Unstructured::new(&buf);
     let accounts = arbitrary_fuzz_state(&mut u).expect("should succeed");
@@ -73,6 +88,56 @@ fn fuzz_state_count_uses_modulo_not_div_or_add() {
         1,
         "with selector byte=8: (8 % 8) + 1 = 1 account; \
          mutation `% \u{2192} /` gives (8/8)+1=2; mutation `% \u{2192} +` gives (8+8)+1=17"
+    );
+}
+
+#[test]
+fn fuzz_state_excludes_reserved_system_ids() {
+    // Genesis overwrites the faucet (balance = u128::MAX) and bridge accounts after
+    // inserting the supplied genesis accounts; a generated account colliding with one
+    // would read back a balance the cap never produced, overflowing conservation sums.
+    // The generator must therefore never emit a reserved system ID.
+    let reserved = [
+        nssa::system_faucet_account_id(),
+        nssa::system_bridge_account_id(),
+    ];
+    let buf = distinct_byte_buffer(10_000);
+    let mut u = Unstructured::new(&buf);
+    let accounts = arbitrary_fuzz_state(&mut u).expect("should succeed");
+    for acc in &accounts {
+        assert!(
+            !reserved.contains(&acc.account_id),
+            "arbitrary_fuzz_state emitted reserved system account ID {:?} \u{2014} \
+             genesis would overwrite it and break the balance-conservation invariant",
+            acc.account_id
+        );
+    }
+}
+
+#[test]
+fn fuzz_state_dedups_account_ids() {
+    // All-identical bytes make every drawn account ID identical; genesis stores
+    // accounts in a HashMap (last-write-wins), so duplicate IDs would let a per-ID
+    // balance sum double-count one account.  The generator must collapse them to one.
+    let buf = vec![0xAB_u8; 10_000];
+    let mut u = Unstructured::new(&buf);
+    let accounts = arbitrary_fuzz_state(&mut u).expect("should succeed");
+    assert!(
+        accounts.len() <= 1,
+        "arbitrary_fuzz_state must dedup identical account IDs; got {} accounts",
+        accounts.len()
+    );
+
+    // Independent confirmation on a distinct-ID draw: no ID appears twice.
+    let distinct_buf = distinct_byte_buffer(10_000);
+    let mut distinct_u = Unstructured::new(&distinct_buf);
+    let distinct_accounts = arbitrary_fuzz_state(&mut distinct_u).expect("should succeed");
+    let unique: std::collections::HashSet<_> =
+        distinct_accounts.iter().map(|a| a.account_id).collect();
+    assert_eq!(
+        unique.len(),
+        distinct_accounts.len(),
+        "arbitrary_fuzz_state returned duplicate account IDs"
     );
 }
 
