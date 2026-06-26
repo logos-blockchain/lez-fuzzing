@@ -259,6 +259,8 @@ jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: main
 
       - name: Download corpus artifacts
         uses: actions/download-artifact@v4
