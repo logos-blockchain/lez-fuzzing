@@ -422,12 +422,16 @@ jobs:
           echo "body_path=$BODY" >> "$GITHUB_OUTPUT"
           echo "::group::Generated PR body"; cat "$BODY"; echo "::endgroup::"
 
+      - name: Generate unique branch suffix
+        id: suffix
+        run: echo "value=$(LC_ALL=C tr -dc 'a-z' </dev/urandom | head -c 4)" >> "$GITHUB_OUTPUT"
+
       - name: Create or update pull request
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.CORPUS_BOT_TOKEN }}
           base: main
-          branch: automation/corpus-update
+          branch: automation/corpus-update-${{ steps.suffix.outputs.value }}
           delete-branch: true
           add-paths: |
             corpus/libfuzz/**
