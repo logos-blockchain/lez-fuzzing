@@ -306,9 +306,9 @@ jobs:
           OUTSIDE="$RUNNER_TEMP/outside.txt"
           : > "$UNUSUAL"; : > "$OUTSIDE"
 
-          # Scan the WHOLE working tree (not just corpus/) so anything touched
-          # outside corpus/ is surfaced for the reviewer.
-          mapfile -t changes < <(git status --porcelain --untracked-files=all)
+          # Scan the working tree (not just corpus/) so anything touched outside
+          # corpus/ is surfaced for the reviewer. Exclude corpus-artifacts.
+          mapfile -t changes < <(git status --porcelain --untracked-files=all -- ':(exclude)corpus-artifacts')
 
           added=0; deleted=0; modified=0; other=0
           declare -A tgt_add tgt_del tgt_mod
