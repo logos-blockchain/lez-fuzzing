@@ -248,6 +248,8 @@ jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: main
 
       - name: Download corpus artifacts
         uses: actions/download-artifact@v4
@@ -279,12 +281,148 @@ jobs:
           echo "Applied corpus for $applied target lane(s)."
           echo "Changed files: $(git status --porcelain corpus | wc -l)"
 
+      - name: Summarise corpus changes for the PR body
+        id: summary
+        env:
+          RUN_URL: "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          RUN_ID: "${{ github.run_id }}"
+          DURATION: "${{ needs.config.outputs.duration }}"
+        run: |
+          set -euo pipefail
+
+          BODY="$RUNNER_TEMP/pr-body.md"
+          UNUSUAL="$RUNNER_TEMP/unusual.txt"
+          OUTSIDE="$RUNNER_TEMP/outside.txt"
+          : > "$UNUSUAL"; : > "$OUTSIDE"
+
+          # Scan the working tree (not just corpus/) so anything touched outside
+          # corpus/ is surfaced for the reviewer. Exclude corpus-artifacts.
+          mapfile -t changes < <(git status --porcelain --untracked-files=all -- ':(exclude)corpus-artifacts')
+
+          added=0; deleted=0; modified=0; other=0
+          declare -A tgt_add tgt_del tgt_mod
+          for line in "${changes[@]}"; do
+            x="${line:0:2}"
+            path="${line:3}"
+            # "old -> new" for renames; keep the destination path.
+            case "$path" in *" -> "*) path="${path##* -> }";; esac
+            # git C-quotes odd names — drop the surrounding quotes for display.
+            path="${path%\"}"; path="${path#\"}"
+
+            case "$x" in
+              "??"|"A "|"AM") added=$((added+1));    cls=add ;;
+              " D"|"D ")      deleted=$((deleted+1)); cls=del ;;
+              " M"|"M "|"MM") modified=$((modified+1)); cls=mod ;;
+              *)              other=$((other+1));     cls=other ;;
+            esac
+
+            case "$path" in
+              corpus/*) ;;
+              *) printf '%s  %s\n' "$x" "$path" >> "$OUTSIDE" ;;
+            esac
+
+            base="${path##*/}"
+            if [[ "$path" == corpus/* ]] && ! [[ "$base" =~ ^[0-9a-f]{40}$ ]]; then
+              printf '%s  %s\n' "$x" "$path" >> "$UNUSUAL"
+            fi
+
+            if [[ "$path" =~ ^corpus/(libfuzz|afl)/([^/]+)/ ]]; then
+              key="${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"
+              case "$cls" in
+                add) tgt_add[$key]=$(( ${tgt_add[$key]:-0} + 1 )) ;;
+                del) tgt_del[$key]=$(( ${tgt_del[$key]:-0} + 1 )) ;;
+                mod) tgt_mod[$key]=$(( ${tgt_mod[$key]:-0} + 1 )) ;;
+              esac
+            fi
+          done
+          total=${#changes[@]}
+
+          {
+            echo "Automated weekly corpus update produced by"
+            echo "\`.github/workflows/corpus-update.yml\` (run [#${RUN_ID}](${RUN_URL}))."
+            echo
+            echo "Per target, in parallel: **Phase 1** fuzzed ${DURATION}s (libFuzzer + AFL++),"
+            echo "**Phase 2** re-minimised the entire corpus (\`cmin\` / \`afl-cmin\`)."
+            echo
+            echo "## Change statistics"
+            echo
+            echo "| Metric | Count |"
+            echo "| --- | ---: |"
+            echo "| Files changed | ${total} |"
+            echo "| Added | ${added} |"
+            echo "| Deleted | ${deleted} |"
+            echo "| Modified | ${modified} |"
+            [ "$other" -gt 0 ] && echo "| Other status | ${other} |"
+            echo
+          } > "$BODY"
+
+          if [ "${#tgt_add[@]}" -gt 0 ] || [ "${#tgt_del[@]}" -gt 0 ] || [ "${#tgt_mod[@]}" -gt 0 ]; then
+            {
+              echo "### Per target"
+              echo
+              echo "| Corpus | Added | Deleted | Modified |"
+              echo "| --- | ---: | ---: | ---: |"
+              printf '%s\n' "${!tgt_add[@]}" "${!tgt_del[@]}" "${!tgt_mod[@]}" \
+                | sort -u | while read -r key; do
+                  [ -n "$key" ] || continue
+                  echo "| \`$key\` | ${tgt_add[$key]:-0} | ${tgt_del[$key]:-0} | ${tgt_mod[$key]:-0} |"
+                done
+              echo
+            } >> "$BODY"
+          fi
+
+          # ── Reviewer flags ────────────────────────────────────────────────
+          emit_list() {  # title, file, intro
+            local title="$1" file="$2" intro="$3" n cap=50
+            n=$(wc -l < "$file" | tr -d ' ')
+            {
+              echo "### ⚠️ $title ($n)"
+              echo
+              echo "$intro"
+              echo
+              echo '```'
+              head -n "$cap" "$file"
+              [ "$n" -gt "$cap" ] && echo "... and $((n - cap)) more"
+              echo '```'
+              echo
+            } >> "$BODY"
+          }
+
+          flagged=0
+          if [ -s "$OUTSIDE" ]; then
+            flagged=1
+            emit_list "Files changed outside \`corpus/\`" "$OUTSIDE" \
+              "A corpus update should only touch \`corpus/\` — review these carefully."
+          fi
+          if [ -s "$UNUSUAL" ]; then
+            flagged=1
+            emit_list "Corpus files with unusual names" "$UNUSUAL" \
+              "Corpus inputs are normally named by their 40-char SHA-1. These are not:"
+          fi
+          if [ "$flagged" -eq 0 ]; then
+            echo "✅ All changes are under \`corpus/\` and named by SHA-1 as expected." >> "$BODY"
+            echo >> "$BODY"
+          fi
+
+          {
+            echo "---"
+            echo "Per-target corpora that crashed or were skipped are left untouched."
+            echo "Review the diff, confirm CI is green, and merge."
+          } >> "$BODY"
+
+          echo "body_path=$BODY" >> "$GITHUB_OUTPUT"
+          echo "::group::Generated PR body"; cat "$BODY"; echo "::endgroup::"
+
+      - name: Generate unique branch suffix
+        id: suffix
+        run: echo "value=$(LC_ALL=C tr -dc 'a-z' </dev/urandom | head -c 4)" >> "$GITHUB_OUTPUT"
+
       - name: Create or update pull request
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.CORPUS_BOT_TOKEN }}
           base: main
-          branch: automation/corpus-update
+          branch: automation/corpus-update-${{ steps.suffix.outputs.value }}
           delete-branch: true
           add-paths: |
             corpus/libfuzz/**
@@ -294,13 +432,4 @@ jobs:
           labels: |
             automation
             corpus
-          body: |
-            Automated weekly corpus update produced by
-            `.github/workflows/corpus-update.yml` (run
-            [#${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})).
-
-            Per target, in parallel: **Phase 1** fuzzed 30 min (libFuzzer + AFL++),
-            **Phase 2** re-minimised the entire corpus (`cmin` / `afl-cmin`).
-
-            Per-target corpora that crashed or were skipped are left untouched.
-            Review the diff, confirm CI is green, and merge.
+          body-path: ${{ steps.summary.outputs.body_path }}

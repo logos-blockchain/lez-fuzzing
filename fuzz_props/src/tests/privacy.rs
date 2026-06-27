@@ -257,6 +257,41 @@ fn arb_validity_window_bounds_use_modulo_8() {
 /// Two flavours of check run here: per-iteration upper bounds that must hold for
 /// *every* generated transaction, and end-of-run reachability checks that confirm
 /// the interesting shapes actually occur across the sampled inputs.
+/// Which branches of the line-233 `if !accounts.is_empty() && bool::arbitrary(u)?` were
+/// observable across a transaction's non-signer "extra" public-account ids.
+#[derive(Default)]
+struct ExtraKinds {
+    /// At least one extra (non-signer id) was appended at all.
+    any: bool,
+    /// An extra equal to a *known* fuzz-account id (the `&&`-true branch).
+    known: bool,
+    /// An extra that is a *random* id (the `else` branch).
+    random: bool,
+}
+
+/// Classify a message's extras. A signer's public-account id is key-derived and independent
+/// of `FuzzAccount.account_id`, so any non-signer id present in `public_account_ids` was
+/// appended by the line-233 `if`; a *known* id can only come from its `&&`-true branch.
+fn classify_extras(
+    public_account_ids: &[AccountId],
+    signer_ids: &[AccountId],
+    known_ids: &std::collections::HashSet<AccountId>,
+) -> ExtraKinds {
+    let mut kinds = ExtraKinds::default();
+    for id in public_account_ids {
+        if signer_ids.contains(id) {
+            continue;
+        }
+        kinds.any = true;
+        if known_ids.contains(id) {
+            kinds.known = true;
+        } else {
+            kinds.random = true;
+        }
+    }
+    kinds
+}
+
 #[test]
 fn arb_privacy_preserving_tx_generator_invariants() {
     let accounts: Vec<FuzzAccount> = (1..=6_u8)
@@ -270,6 +305,9 @@ fn arb_privacy_preserving_tx_generator_invariants() {
         accounts.iter().map(|a| (a.account_id, a.balance)).collect();
     let state = crate::genesis::genesis_state(&genesis, vec![]);
 
+    let known_ids: std::collections::HashSet<AccountId> =
+        accounts.iter().map(|a| a.account_id).collect();
+
     let mut rng = Rng::new();
     let mut buf = vec![0_u8; 8192];
 
@@ -277,6 +315,8 @@ fn arb_privacy_preserving_tx_generator_invariants() {
     let mut max_signers = 0_usize;
     let mut saw_signer = false;
     let mut saw_extra = false;
+    let mut saw_known_extra = false;
+    let mut saw_random_extra = false;
     let mut max_commitments = 0_usize;
     let mut max_nullifiers = 0_usize;
     let mut saw_empty_comm_nonempty_null = false;
@@ -344,14 +384,12 @@ fn arb_privacy_preserving_tx_generator_invariants() {
             msg.encrypted_private_post_states.len()
         );
 
-        // An id that is not a signer can only be present because an extra was appended.
-        if msg
-            .public_account_ids
-            .iter()
-            .any(|id| !signer_ids.contains(id))
-        {
-            saw_extra = true;
-        }
+        // Classify the non-signer "extras" by which branch of the line-233 `if` produced
+        // them — a *known* fuzz-account id, a *random* id, or both.
+        let extras = classify_extras(&msg.public_account_ids, &signer_ids, &known_ids);
+        saw_extra |= extras.any;
+        saw_known_extra |= extras.known;
+        saw_random_extra |= extras.random;
 
         max_commitments = max_commitments.max(msg.new_commitments.len());
         max_nullifiers = max_nullifiers.max(msg.new_nullifiers.len());
@@ -392,6 +430,19 @@ fn arb_privacy_preserving_tx_generator_invariants() {
     assert!(
         saw_extra,
         "the generator never appended an extra public account id"
+    );
+    // Both branches `if !accounts.is_empty() && bool::arbitrary(u)?` must be
+    // reachable. The known-account branch must fire (else `delete !` — which short-circuits to
+    // the random branch when accounts are present — would be indistinguishable)
+    assert!(
+        saw_known_extra,
+        "the generator never appended a *known* fuzz-account id as an extra"
+    );
+    // …and the random branch must fire (else `&&`→`||` — which short-circuits to the known
+    // branch when accounts are present — would be indistinguishable).
+    assert!(
+        saw_random_extra,
+        "the generator never appended a *random* id as an extra"
     );
     // Multiple distinct commitments must be reachable (the dedup must keep, not drop).
     assert!(

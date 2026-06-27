@@ -230,7 +230,7 @@ pub fn arb_privacy_preserving_tx(
     }
     let n_extra = (u8::arbitrary(u)? as usize) % 4;
     for _ in 0..n_extra {
-        let id = if bool::arbitrary(u)? {
+        let id = if !accounts.is_empty() && bool::arbitrary(u)? {
             // a known fuzz account — its post-state change is observable in the snapshot
             accounts[(u8::arbitrary(u)? as usize) % accounts.len()].account_id
         } else {
