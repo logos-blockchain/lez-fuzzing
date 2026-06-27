@@ -59,19 +59,54 @@ pub struct FuzzAccount {
 /// conservation checks can therefore use `checked_add` instead of `saturating_add` to
 /// turn silent overflow into a detected violation, ruling out false-positive panics on
 /// legitimate fuzz inputs.
+///
+/// # Reserved-ID and duplicate exclusion
+///
+/// The cap above is only sound if every generated balance survives genesis construction
+/// unchanged.  Two failure modes break that:
+///
+/// * **Reserved system accounts.** [`nssa::V03State::new_with_genesis_accounts`] inserts
+///   the faucet account (`balance = u128::MAX`) and bridge account *after* the supplied
+///   genesis accounts, overwriting any generated account whose ID collides.  A fuzzer that
+///   lands on the faucet ID would make a caller read back `u128::MAX` instead of the capped
+///   balance it generated, overflowing the conservation sum — a harness false positive, not
+///   a protocol bug.
+/// * **Duplicate IDs.** Genesis stores accounts in a `HashMap` keyed by ID, so duplicate
+///   IDs collapse to a single (last-write-wins) account, while a caller's per-ID balance sum
+///   double-counts that account's balance.
+///
+/// Both are excluded here: generated IDs equal to a reserved system account, or already
+/// seen in this state, are skipped.  The result therefore contains only distinct,
+/// non-reserved IDs whose generated balances match what genesis stores — so `0..=8`
+/// accounts are returned (an empty state is a valid degenerate case).
 pub fn arbitrary_fuzz_state(u: &mut Unstructured<'_>) -> arbitrary::Result<Vec<FuzzAccount>> {
+    let reserved = [
+        nssa::system_faucet_account_id(),
+        nssa::system_bridge_account_id(),
+    ];
     let n = ((u8::arbitrary(u)? as usize) % 8) + 1; // 1..=8
-    std::iter::repeat_with(|| {
-        Ok(FuzzAccount {
-            account_id: ArbAccountId::arbitrary(u)?.0,
-            // Divide by 8 so the sum of 8 accounts is at most u128::MAX, preventing
-            // false-positive checked_add panics that would mask real inflation bugs.
-            balance: u128::arbitrary(u)? / 8,
-            private_key: ArbPrivateKey::arbitrary(u)?.0,
-        })
-    })
-    .take(n)
-    .collect()
+
+    let mut seen = std::collections::HashSet::with_capacity(n);
+    let mut accounts = Vec::with_capacity(n);
+    for _ in 0..n {
+        let account_id = ArbAccountId::arbitrary(u)?.0;
+        // Divide by 8 so the sum of 8 accounts is at most u128::MAX, preventing
+        // false-positive checked_add panics that would mask real inflation bugs.
+        let balance = u128::arbitrary(u)? / 8;
+        let private_key = ArbPrivateKey::arbitrary(u)?.0;
+
+        // Skip IDs that genesis would overwrite (reserved system accounts) or that would
+        // collapse on insertion (duplicates); see the doc comment above.
+        if reserved.contains(&account_id) || !seen.insert(account_id) {
+            continue;
+        }
+        accounts.push(FuzzAccount {
+            account_id,
+            balance,
+            private_key,
+        });
+    }
+    Ok(accounts)
 }
 
 /// Reduce raw fuzzer draws into a *biased-valid* `(nonce, amount)` pair.

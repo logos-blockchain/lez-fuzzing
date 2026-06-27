@@ -1,0 +1,35 @@
+name: Set up AFL++ toolchain
+description: >
+  Build and install AFL++ from source, then install the Rust stable toolchain
+  and cargo-afl. The repository must already be checked out before this runs.
+
+inputs:
+  afl-version:
+    description: AFL++ git tag to build from source.
+    required: false
+    default: v4.40c
+
+runs:
+  using: composite
+  steps:
+    - name: Install AFL++ ${{ inputs.afl-version }} from source
+      shell: bash
+      run: |
+        sudo apt-get update -q
+        sudo apt-get install -y \
+          build-essential python3-dev automake cmake \
+          flex bison libglib2.0-dev libpixman-1-dev \
+          python3-setuptools ninja-build
+        git clone --depth 1 --branch ${{ inputs.afl-version }} \
+          https://github.com/AFLplusplus/AFLplusplus /tmp/aflplusplus
+        cd /tmp/aflplusplus
+        make distrib
+        sudo make install
+        afl-fuzz --version
+
+    - name: Install Rust (stable)
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Install cargo-afl
+      shell: bash
+      run: cargo install cargo-afl --locked

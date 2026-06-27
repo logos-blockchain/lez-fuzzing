@@ -1,0 +1,28 @@
+name: Resolve fuzz target matrix
+description: >
+  Parse fuzz/Cargo.toml (the single source of truth) and emit every
+  `[[bin]] name = "fuzz_*"` target as a compact JSON array, ready to feed a
+  `strategy.matrix.target`. The repository must already be checked out.
+
+outputs:
+  targets:
+    description: JSON array of fuzz target names, in Cargo.toml order.
+    value: ${{ steps.list.outputs.targets }}
+
+runs:
+  using: composite
+  steps:
+    - id: list
+      shell: bash
+      run: |
+        # Same source of truth enforced by scripts/check_target_inventory.py.
+        targets=$(grep -oE 'name = "fuzz_[a-z0-9_]+"' fuzz/Cargo.toml \
+          | sed -E 's/.*"(fuzz_[a-z0-9_]+)"/\1/' \
+          | awk '!seen[$0]++' \
+          | jq -R -s -c 'split("\n") | map(select(length > 0))')
+        if [ "$targets" = "[]" ] || [ -z "$targets" ]; then
+          echo "ERROR: no fuzz_* [[bin]] targets found in fuzz/Cargo.toml" >&2
+          exit 1
+        fi
+        echo "targets=$targets" >> "$GITHUB_OUTPUT"
+        echo "Resolved targets: $targets"
