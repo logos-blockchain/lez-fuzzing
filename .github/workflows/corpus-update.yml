@@ -32,9 +32,6 @@ on:
         description: "Skip fuzzing; only minimise the existing corpus"
         type: boolean
         default: false
-  push:
-    branches:
-      - feat-automatic-corpus-updates
 
 env:
   RISC0_DEV_MODE: "1"
