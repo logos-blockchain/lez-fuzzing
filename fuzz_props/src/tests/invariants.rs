@@ -9,7 +9,7 @@ use nssa::V03State;
 use nssa_core::account::Nonce;
 
 fn make_empty_state() -> V03State {
-    V03State::new_with_genesis_accounts(&[], vec![], 0)
+    crate::genesis::genesis_state(&[], vec![])
 }
 
 fn make_empty_snapshot() -> BalanceSnapshot {
@@ -49,8 +49,8 @@ fn assert_invariants_does_not_panic_on_success_with_empty_state() {
 #[test]
 fn balance_conservation_catches_inflation_on_success() {
     let acc_id = nssa::AccountId::new([1_u8; 32]);
-    let state_before = V03State::new_with_genesis_accounts(&[(acc_id, 100)], vec![], 0);
-    let state_after = V03State::new_with_genesis_accounts(&[(acc_id, 200)], vec![], 0);
+    let state_before = crate::genesis::genesis_state(&[(acc_id, 100)], vec![]);
+    let state_after = crate::genesis::genesis_state(&[(acc_id, 200)], vec![]);
 
     let mut balances = std::collections::HashMap::new();
     balances.insert(acc_id, 100_u128);
@@ -83,7 +83,7 @@ fn nonce_increment_correctness_passes_when_signer_not_in_snapshot() {
 #[test]
 fn nonce_increment_correctness_catches_unchanged_nonce() {
     let acc_id = nssa::AccountId::new([3_u8; 32]);
-    let state = V03State::new_with_genesis_accounts(&[], vec![], 0);
+    let state = crate::genesis::genesis_state(&[], vec![]);
 
     let mut nonces = std::collections::HashMap::new();
     nonces.insert(acc_id, Nonce(5));
@@ -97,8 +97,8 @@ fn nonce_increment_correctness_catches_unchanged_nonce() {
 #[test]
 fn failed_tx_nonce_stability_catches_nonce_mutation() {
     let acc_id = nssa::AccountId::new([2_u8; 32]);
-    let state_before = V03State::new_with_genesis_accounts(&[(acc_id, 100)], vec![], 0);
-    let state_after = V03State::new_with_genesis_accounts(&[(acc_id, 100)], vec![], 0);
+    let state_before = crate::genesis::genesis_state(&[(acc_id, 100)], vec![]);
+    let state_after = crate::genesis::genesis_state(&[(acc_id, 100)], vec![]);
 
     let mut nonces = std::collections::HashMap::new();
     nonces.insert(acc_id, Nonce(1));
@@ -208,7 +208,7 @@ fn failed_tx_nonce_stability_name_is_nonempty_and_not_placeholder() {
 fn state_isolation_check_detects_balance_change_on_failure() {
     let acc_id = nssa::AccountId::new([1_u8; 32]);
     // State has balance 100 for acc_id.
-    let state = V03State::new_with_genesis_accounts(&[(acc_id, 100)], vec![], 0);
+    let state = crate::genesis::genesis_state(&[(acc_id, 100)], vec![]);
 
     // balances_before claims balance was 50, but state_after (== state) has 100.
     let mut balances = std::collections::HashMap::new();
@@ -251,7 +251,7 @@ fn assert_replay_rejection_panics_when_replay_not_rejected() {
     let validated = tx
         .transaction_stateless_check()
         .expect("test setup: transaction must pass stateless validation");
-    let mut scratch_state = V03State::new_with_genesis_accounts(&genesis, vec![], 0);
+    let mut scratch_state = crate::genesis::genesis_state(&genesis, vec![]);
     let applied_tx = validated
         .execute_check_on_state(&mut scratch_state, 1, 1)
         .expect("test setup: first execution must succeed (block_id=1, timestamp=1)");
@@ -259,7 +259,7 @@ fn assert_replay_rejection_panics_when_replay_not_rejected() {
     // Replay `applied_tx` (nonce 0) against a FRESH state still at nonce 0.
     // The nonce matches → execute_check_on_state ACCEPTS the replay — a protocol
     // violation that assert_replay_rejection must detect and panic on.
-    let mut fresh_state = V03State::new_with_genesis_accounts(&genesis, vec![], 0);
+    let mut fresh_state = crate::genesis::genesis_state(&genesis, vec![]);
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         assert_replay_rejection(applied_tx, &mut fresh_state, 1, 1);
     }));
@@ -277,8 +277,8 @@ fn assert_replay_rejection_panics_when_replay_not_rejected() {
 fn assert_tx_execution_invariants_is_not_noop() {
     let acc_id = nssa::AccountId::new([5_u8; 32]);
     // Both state_before and state_after have the account at balance 100.
-    let state_before = V03State::new_with_genesis_accounts(&[(acc_id, 100)], vec![], 0);
-    let mut state_after = V03State::new_with_genesis_accounts(&[(acc_id, 100)], vec![], 0);
+    let state_before = crate::genesis::genesis_state(&[(acc_id, 100)], vec![]);
+    let mut state_after = crate::genesis::genesis_state(&[(acc_id, 100)], vec![]);
 
     // Lie: claim balance was 50 before.  State_after shows 100.
     // With execution_succeeded=false, StateIsolationOnFailure detects the discrepancy.

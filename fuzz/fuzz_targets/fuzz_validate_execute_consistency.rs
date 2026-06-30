@@ -28,7 +28,6 @@ use arbitrary::{Arbitrary, Unstructured};
 use fuzz_props::arbitrary_types::ArbLeeTransaction;
 use fuzz_props::generators::{arbitrary_fuzz_state, signer_account_ids};
 use fuzz_props::invariants::{NonceSnapshot, assert_nonce_increment_correctness};
-use nssa::V03State;
 
 fuzz_props::fuzz_entry!(|data: &[u8]| {
     let mut u = Unstructured::new(data);
@@ -55,7 +54,7 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
     // Stateless gate — skip structurally malformed transactions.
     let Ok(tx) = tx.transaction_stateless_check() else { return; };
 
-    let state = V03State::new_with_genesis_accounts(&init_accs, vec![], 0);
+    let state = fuzz_props::genesis::genesis_state(&init_accs, vec![]);
 
     // Capture nonces of all known accounts before execution so that
     // assert_nonce_increment_correctness can verify the +1 step on success.

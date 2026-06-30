@@ -22,7 +22,7 @@ use arbitrary::{Arbitrary, Unstructured};
 use common::transaction::LeeTransaction;
 use fuzz_props::arbitrary_types::ArbPublicTransaction;
 use fuzz_props::generators::arbitrary_fuzz_state;
-use nssa::{V03State, ValidatedStateDiff};
+use nssa::ValidatedStateDiff;
 
 fuzz_props::fuzz_entry!(|data: &[u8]| {
     let mut u = Unstructured::new(data);
@@ -36,7 +36,7 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
         .iter()
         .map(|a| (a.account_id, a.balance))
         .collect();
-    let state = V03State::new_with_genesis_accounts(&init_accs, vec![], 0);
+    let state = fuzz_props::genesis::genesis_state(&init_accs, vec![]);
 
     // Generate the public transaction from remaining fuzz bytes.
     let pub_tx = match ArbPublicTransaction::arbitrary(&mut u) {

@@ -98,8 +98,8 @@ fn fuzz_state_excludes_reserved_system_ids() {
     // would read back a balance the cap never produced, overflowing conservation sums.
     // The generator must therefore never emit a reserved system ID.
     let reserved = [
-        nssa::system_faucet_account_id(),
-        nssa::system_bridge_account_id(),
+        system_accounts::faucet_account_id(),
+        system_accounts::bridge_account_id(),
     ];
     let buf = distinct_byte_buffer(10_000);
     let mut u = Unstructured::new(&buf);

@@ -53,11 +53,6 @@ jobs:
       - name: Checkout logos-execution-zone
         uses: ./.github/actions/checkout-lez
 
-      - name: Install logos-blockchain-circuits
-        uses: ./logos-execution-zone/.github/actions/install-logos-blockchain-circuits
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Install nightly toolchain with clippy
         uses: dtolnay/rust-toolchain@nightly
         with:

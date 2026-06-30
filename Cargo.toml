@@ -59,8 +59,10 @@ nssa_core             = { path = "../logos-execution-zone/lee/state_machine/core
 common                = { path = "../logos-execution-zone/lez/common" }
 key_protocol          = { path = "../logos-execution-zone/lee/key_protocol" }
 testnet_initial_state = { path = "../logos-execution-zone/lez/testnet_initial_state" }
-token_core            = { path = "../logos-execution-zone/programs/token/core" }
-test_program_methods  = { path = "../logos-execution-zone/test_program_methods" }
+programs              = { path = "../logos-execution-zone/lez/programs" }
+system_accounts       = { path = "../logos-execution-zone/lez/system_accounts" }
+token_core            = { path = "../logos-execution-zone/lez/programs/token/core" }
+test_program_methods  = { path = "../logos-execution-zone/test_programs", package = "test_programs" }
 
 # ── Third-party dependencies (versions mirrored from logos-execution-zone) ────
 anyhow       = "1.0.98"

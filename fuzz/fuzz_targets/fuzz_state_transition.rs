@@ -3,7 +3,6 @@
 use arbitrary::{Arbitrary, Unstructured};
 use fuzz_props::generators::{arb_fuzz_native_transfer, arbitrary_fuzz_state, arbitrary_transaction};
 use fuzz_props::invariants::{BalanceSnapshot, NonceSnapshot, assert_tx_execution_invariants};
-use nssa::V03State;
 
 fuzz_props::fuzz_entry!(|data: &[u8]| {
     let mut u = Unstructured::new(data);
@@ -22,7 +21,7 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
         .collect();
 
     // Construct the initial state
-    let mut state = V03State::new_with_genesis_accounts(&init_accs, vec![], 0);
+    let mut state = fuzz_props::genesis::genesis_state(&init_accs, vec![]);
 
     // Generate up to 8 transactions and apply them
     let n_txs: u8 = u8::arbitrary(&mut u).unwrap_or(0) % 8;

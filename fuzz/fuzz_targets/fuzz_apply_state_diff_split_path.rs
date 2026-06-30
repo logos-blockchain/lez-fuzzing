@@ -36,7 +36,6 @@ use arbitrary::{Arbitrary, Unstructured};
 use fuzz_props::arbitrary_types::ArbLeeTransaction;
 use fuzz_props::generators::{arbitrary_fuzz_state, signer_account_ids};
 use fuzz_props::invariants::{NonceSnapshot, assert_nonce_increment_correctness};
-use nssa::V03State;
 
 fuzz_props::fuzz_entry!(|data: &[u8]| {
     let mut u = Unstructured::new(data);
@@ -60,7 +59,7 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
         return;
     };
 
-    let state = V03State::new_with_genesis_accounts(&init_accs, vec![], 0);
+    let state = fuzz_props::genesis::genesis_state(&init_accs, vec![]);
 
     // ── Split path: validate → apply ─────────────────────────────────────────
     // `validate_on_state` borrows `tx`; the transaction is still usable after.

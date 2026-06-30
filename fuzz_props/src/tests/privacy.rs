@@ -5,7 +5,7 @@ use crate::privacy::{
     arb_account, arb_privacy_preserving_tx, arb_validity_window, synthesize_passing_proof,
 };
 use nssa::privacy_preserving_transaction::{Message as PPMessage, WitnessSet as PPWitnessSet};
-use nssa::{AccountId, PrivacyPreservingTransaction, PrivateKey, V03State};
+use nssa::{AccountId, PrivacyPreservingTransaction, PrivateKey};
 use nssa_core::Commitment;
 use nssa_core::account::Account;
 use nssa_core::program::{BlockValidityWindow, TimestampValidityWindow};
@@ -25,7 +25,7 @@ fn synthesized_proof_reaches_checks_5_6_and_applies() {
         return;
     }
 
-    let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0);
+    let mut state = crate::genesis::genesis_state(&[], vec![]);
 
     // No signers and a single fresh commitment: checks 1–3 are vacuous/trivially met, so
     // the only way to reach checks 5–6 is for the synthesised proof to pass check 4.
@@ -84,7 +84,7 @@ fn synthesized_proof_is_rejected_without_dev_mode() {
         return;
     }
 
-    let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0);
+    let mut state = crate::genesis::genesis_state(&[], vec![]);
 
     // Same well-formed message as the positive test: checks 1–3 are vacuous/trivially met, so a
     // rejection can only come from check 4 (proof verification) failing on the fake receipt.
@@ -303,7 +303,7 @@ fn arb_privacy_preserving_tx_generator_invariants() {
         .collect();
     let genesis: Vec<(AccountId, u128)> =
         accounts.iter().map(|a| (a.account_id, a.balance)).collect();
-    let state = V03State::new_with_genesis_accounts(&genesis, vec![], 0);
+    let state = crate::genesis::genesis_state(&genesis, vec![]);
 
     let known_ids: std::collections::HashSet<AccountId> =
         accounts.iter().map(|a| a.account_id).collect();

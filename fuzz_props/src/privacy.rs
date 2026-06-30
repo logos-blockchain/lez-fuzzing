@@ -40,8 +40,7 @@
 use arbitrary::{Arbitrary, Result as ArbResult, Unstructured};
 use borsh::to_vec as borsh_to_vec;
 use nssa::{
-    AccountId, PRIVACY_PRESERVING_CIRCUIT_ID, PrivacyPreservingTransaction, PrivateKey, PublicKey,
-    V03State,
+    AccountId, PRIVACY_PRESERVING_CIRCUIT_ID, PrivacyPreservingTransaction, PrivateKey, V03State,
     privacy_preserving_transaction::{
         Message as PPMessage, WitnessSet as PPWitnessSet, circuit::Proof,
     },
@@ -54,7 +53,7 @@ use nssa_core::{
 };
 use risc0_zkvm::{FakeReceipt, InnerReceipt, ReceiptClaim};
 
-use crate::generators::FuzzAccount;
+use crate::generators::{FuzzAccount, account_id_for_key};
 
 /// Synthesise a [`Proof`] that **passes** `Proof::is_valid_for` for `message` against
 /// `state`, under `RISC0_DEV_MODE`.
@@ -193,8 +192,9 @@ pub fn arb_privacy_preserving_tx(
 ) -> ArbResult<PrivacyPreservingTransaction> {
     // ── Signers ──────────────────────────────────────────────────────────────────────
     // 0..=3 distinct signers drawn from the keyed fuzz accounts. A signer's public-account
-    // id is `AccountId::from(&its_public_key)` — exactly what the validator derives from the
-    // witness set — and is independent of `FuzzAccount.account_id`.
+    // id is `account_id_for_key(key)` — exactly what the validator derives from the witness
+    // set. Since `arbitrary_fuzz_state` now derives `FuzzAccount.account_id` the same way,
+    // this id also equals that account's `account_id`, so the funded account is the signer.
     let max_signers = accounts.len().min(3);
     let n_signers = if max_signers == 0 {
         0
@@ -205,7 +205,7 @@ pub fn arb_privacy_preserving_tx(
     let mut signer_ids: Vec<AccountId> = Vec::with_capacity(n_signers);
     for _ in 0..n_signers {
         let key = &accounts[(u8::arbitrary(u)? as usize) % accounts.len()].private_key;
-        let id = AccountId::from(&PublicKey::new_from_private_key(key));
+        let id = account_id_for_key(key);
         if signer_ids.contains(&id) {
             continue; // keep signer ids distinct so `nonces` stays 1:1 with `keys`
         }

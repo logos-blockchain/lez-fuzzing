@@ -16,8 +16,9 @@
 //! A single `\x00` seed is sufficient — Part 1 uses fixed inputs and catches the
 //! `delete-!` mutation without fuzz-driven state.
 
-use nssa::{Account, AccountId, V03State, system_faucet_account_id};
+use nssa::{Account, AccountId, V03State};
 use nssa_core::{Commitment, Nullifier};
+use system_accounts::faucet_account_id;
 
 fuzz_props::fuzz_entry!(|data: &[u8]| {
     // ── Part 1: State with nullifiers — Borsh round-trip ─────────────────────
@@ -37,10 +38,9 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
         let comm2 = Commitment::new(&AccountId::new([0x22_u8; 32]), &Account::default());
 
         // Build a state that holds two nullifiers in its private state.
-        let state = V03State::new_with_genesis_accounts(
-            &[(system_faucet_account_id(), 0)],
+        let state = fuzz_props::genesis::genesis_state(
+            &[(faucet_account_id(), 0)],
             vec![(comm1, null1), (comm2, null2)],
-            0,
         );
 
         // Serialise the state:

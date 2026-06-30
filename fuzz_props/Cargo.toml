@@ -21,6 +21,10 @@ risc0-zkvm = { workspace = true }
 proptest   = "1.4"
 arbitrary  = { version = "1", features = ["derive"] }
 testnet_initial_state = { workspace = true }
+# Reproduce LEZ genesis (builtin programs + system accounts) in `genesis_state`,
+# which LEZ moved out of the state machine into these crates.
+programs        = { workspace = true }
+system_accounts = { workspace = true }
 
 [dev-dependencies]
 proptest = "1.4"
