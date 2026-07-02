@@ -20,29 +20,23 @@ FUZZ_REPO="${FUZZ_REPO:-"$(cd "${SCRIPT_DIR}/.." && pwd)"}"
 CORPUS_ROOT="${FUZZ_REPO}/corpus/libfuzz"
 FUZZ_DIR="${FUZZ_REPO}/fuzz"
 
-targets=(
-  fuzz_transaction_decoding
-  fuzz_stateless_verification
-  fuzz_state_transition
-  fuzz_block_verification
-  fuzz_encoding_roundtrip
-  fuzz_signature_verification
-  fuzz_replay_prevention
-  fuzz_state_diff_computation
-  fuzz_validate_execute_consistency
-  fuzz_state_serialization
-  fuzz_witness_set_verification
-  fuzz_program_deployment_lifecycle
-  fuzz_apply_state_diff_split_path
-  fuzz_multi_block_state_sequence
-  fuzz_sequencer_vs_replayer
-  fuzz_merkle_tree
-  fuzz_transaction_properties
-  fuzz_privacy_preserving_witness
-  fuzz_encoding_privacy_preserving
-  fuzz_nullifier_set_roundtrip
-  fuzz_privacy_preserving_state_transition
+# Derive the target list from fuzz/Cargo.toml (the single source of truth) — the same
+# `[[bin]] name = "fuzz_*"` parse that .github/actions/resolve-targets uses. This keeps
+# the script in sync with every workflow automatically, with no hand-maintained list.
+# (A while-read loop rather than `mapfile`, so this also works under macOS' bash 3.2.)
+CARGO_TOML="${FUZZ_DIR}/Cargo.toml"
+targets=()
+while IFS= read -r _target; do
+  [ -n "${_target}" ] && targets+=("${_target}")
+done < <(
+  grep -oE 'name = "fuzz_[a-z0-9_]+"' "${CARGO_TOML}" \
+    | sed -E 's/.*"(fuzz_[a-z0-9_]+)"/\1/' \
+    | awk '!seen[$0]++'
 )
+if [ "${#targets[@]}" -eq 0 ]; then
+  echo "ERROR: no fuzz_* [[bin]] targets found in ${CARGO_TOML}" >&2
+  exit 1
+fi
 
 # cargo-fuzz requires the nightly toolchain (-Zsanitizer=address etc.).
 # When this script is called by `cargo-mutants` the working directory is the

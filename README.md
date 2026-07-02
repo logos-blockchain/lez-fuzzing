@@ -168,13 +168,19 @@ cp fuzz/artifacts/fuzz_state_transition/crash-abc123-minimised \
 ## ➕ Adding a New Target
 
 ```bash
-# Scaffold everything automatically (corpus dir, .rs file, Cargo.toml entry, CI matrix entry)
+# Scaffold everything automatically (corpus dir, .rs file, Cargo.toml entry)
 just new-target my_feature   # creates fuzz_my_feature
 ```
 
 `just new-target` calls [`scripts/add_fuzz_target.py`](scripts/add_fuzz_target.py), which
-appends the `[[bin]]` entry to [`fuzz/Cargo.toml`](fuzz/Cargo.toml) and inserts the target
-into every strategy matrix in [`.github/workflows/fuzz.yml`](.github/workflows/fuzz.yml).
+appends the `[[bin]]` entry to [`fuzz/Cargo.toml`](fuzz/Cargo.toml) — the **single source of
+truth**. Every workflow and script derives its target list from that file at runtime (the CI
+matrices and build loops via the [`resolve-targets`](.github/actions/resolve-targets)
+composite action, and [`scripts/mutants-corpus-test.sh`](scripts/mutants-corpus-test.sh) via
+an inline parse), so **no CI edits are needed**. The only manual step is a prose row in the
+target tables of `README.md` and [`docs/fuzzing.md`](docs/fuzzing.md);
+[`scripts/check_target_inventory.py`](scripts/check_target_inventory.py) (run in CI) fails the
+build if either table drifts from `fuzz/Cargo.toml`.
 
 ---
 

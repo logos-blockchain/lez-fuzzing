@@ -148,8 +148,7 @@ This single command does four things automatically:
 |---|---|
 | Creates the corpus directory | `fuzz/corpus/fuzz_my_feature/` |
 | Writes a typed fuzz target template | `fuzz/fuzz_targets/fuzz_my_feature.rs` |
-| Appends `[[bin]]` entry to `fuzz/Cargo.toml` | Covers **both** the libFuzzer and AFL++ lanes |
-| Inserts target into every CI matrix + perf loop | `.github/workflows/fuzz.yml` |
+| Appends `[[bin]]` entry to `fuzz/Cargo.toml` | Covers **both** the libFuzzer and AFL++ lanes — and every workflow/script, which derive their target lists from this file |
 
 The generated template uses `fuzz_props::fuzz_entry!` and works with both engines
 without modification.
@@ -165,16 +164,26 @@ structured input, or the proptest generators from
 ### Step 3 — Automated registration (cargo-fuzz + CI)
 
 `just new-target` calls [`scripts/add_fuzz_target.py`](../scripts/add_fuzz_target.py)
-which:
-- Appends the `[[bin]]` entry to [`fuzz/Cargo.toml`](../fuzz/Cargo.toml).
-  This **single entry** covers both the libFuzzer lane (`cargo fuzz build`) and
-  the AFL++ lane (`cargo afl build --no-default-features --features fuzzer-afl`).
-- Inserts the target name into every strategy matrix and the perf-baseline shell
-  loop in [`.github/workflows/fuzz.yml`](../.github/workflows/fuzz.yml).
+which appends the `[[bin]]` entry to [`fuzz/Cargo.toml`](../fuzz/Cargo.toml). This
+**single entry** covers both the libFuzzer lane (`cargo fuzz build`) and the AFL++
+lane (`cargo afl build --no-default-features --features fuzzer-afl`) — and it is the
+**single source of truth** every workflow and script reads at runtime:
+
+- The CI matrices and build loops (`fuzz.yml`, `fuzz-afl.yml`, `corpus-update.yml`,
+  `mutants.yml`) resolve their target list through the
+  [`resolve-targets`](../.github/actions/resolve-targets) composite action, which
+  parses `fuzz/Cargo.toml`.
+- [`scripts/mutants-corpus-test.sh`](../scripts/mutants-corpus-test.sh) parses the
+  same file inline.
+
+So a new `[[bin]]` needs **no workflow edits** — the only hand-authored places are the
+prose target tables in this file and `README.md`, which
+[`scripts/check_target_inventory.py`](../scripts/check_target_inventory.py) (run in CI)
+checks against `fuzz/Cargo.toml`.
 
 > [!TIP]
 > **Manual fallback:** if you create a target without `just new-target`, add the
-> entry yourself:
+> entry yourself — that alone wires it into every lane:
 >
 > ```toml
 > [[bin]]
@@ -207,7 +216,8 @@ cd fuzz && cargo afl build \
 | `fuzz/corpus/fuzz_<name>/` | Create | ✅ `just new-target` |
 | `fuzz/Cargo.toml` | Add `[[bin]]` (covers both lanes) | ✅ `just new-target` |
 | `Justfile` | Nothing — auto-discovers | ✅ automatic |
-| `.github/workflows/fuzz.yml` | Add to 3 matrix lists | ✅ `just new-target` |
+| `.github/workflows/*.yml`, `scripts/mutants-corpus-test.sh` | Nothing — target lists derive from `fuzz/Cargo.toml` | ✅ automatic |
+| `README.md`, `docs/fuzzing.md` | Add a prose row to the target table | ⚠️ manual (CI-gated by `check_target_inventory.py`) |
 
 ---
 

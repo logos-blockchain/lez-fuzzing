@@ -21,37 +21,13 @@ jobs:
     outputs:
       targets: ${{ steps.list.outputs.targets }}
     steps:
-      - name: Build target list
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      # Derive the matrix straight from fuzz/Cargo.toml (the single source of truth),
+      # so new [[bin]] targets are picked up with no manual list to maintain here.
+      - name: Resolve fuzz target matrix
         id: list
-        run: |
-          # Canonical, human-readable list (one target per line) → compact JSON array.
-          targets=$(jq -R -s -c 'split("\n") | map(select(length > 0))' <<'EOF'
-          fuzz_apply_state_diff_split_path
-          fuzz_block_verification
-          fuzz_encoding_roundtrip
-          fuzz_multi_block_state_sequence
-          fuzz_program_deployment_lifecycle
-          fuzz_replay_prevention
-          fuzz_sequencer_vs_replayer
-          fuzz_signature_verification
-          fuzz_state_diff_computation
-          fuzz_state_serialization
-          fuzz_state_transition
-          fuzz_stateless_verification
-          fuzz_transaction_decoding
-          fuzz_validate_execute_consistency
-          fuzz_witness_set_verification
-          fuzz_merkle_tree
-          fuzz_transaction_properties
-          fuzz_privacy_preserving_witness
-          fuzz_encoding_privacy_preserving
-          fuzz_nullifier_set_roundtrip
-          fuzz_privacy_preserving_state_transition
-          fuzz_transaction_ordering_independence
-          EOF
-          )
-          echo "targets=$targets" >> "$GITHUB_OUTPUT"
-          echo "Resolved ${targets}"
+        uses: ./.github/actions/resolve-targets
 
   # ────────────────────────────────────────────────────────────────────────────
   # afl-smoke — 60-second per targets
