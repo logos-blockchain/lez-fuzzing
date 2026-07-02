@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
 """Fail if any fuzz target registered in fuzz/Cargo.toml is missing from a
-workflow / script / doc that enumerates the target list.
+human-authored doc that enumerates the target list.
 
 `fuzz/Cargo.toml` is the single source of truth: every `[[bin]] name = "fuzz_*"`
-must be mentioned by name in each of the consumer files below. This guards
-against the drift that `scripts/add_fuzz_target.py` cannot prevent on its own
-(it only edits `.github/workflows/fuzz.yml`).
+must be mentioned by name in each consumer file below.
+
+The CI workflows and shell scripts derive their target lists *directly* from
+`fuzz/Cargo.toml` at runtime, so they cannot drift and are not checked here:
+  - `.github/workflows/{fuzz,fuzz-afl}.yml` and the `corpus-update.yml` matrices
+    use the `.github/actions/resolve-targets` composite action.
+  - `.github/workflows/mutants.yml` calls the same action for its build loop.
+  - `scripts/mutants-corpus-test.sh` parses `fuzz/Cargo.toml` inline.
+Only the prose target tables in the docs below carry a hand-written description
+per target and therefore need this drift gate.
 
 Usage:
     python3 scripts/check_target_inventory.py
@@ -19,13 +26,10 @@ import re
 import sys
 from pathlib import Path
 
-# Files that enumerate the full target list and must stay in sync with Cargo.toml.
+# Human-authored docs whose prose target tables must stay in sync with Cargo.toml.
+# (Workflows/scripts auto-derive their lists from Cargo.toml — see the module docstring.)
 # Paths are relative to the repository root.
 CONSUMERS = [
-    ".github/workflows/fuzz.yml",
-    ".github/workflows/fuzz-afl.yml",
-    ".github/workflows/mutants.yml",
-    "scripts/mutants-corpus-test.sh",
     "README.md",
     "docs/fuzzing.md",
 ]

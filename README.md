@@ -6,7 +6,7 @@
 [Logos Execution Zone (LEZ)](https://github.com/logos-blockchain/logos-execution-zone) protocol.**
 
 [![Rust](https://img.shields.io/badge/rust-nightly-orange?logo=rust)](rust-toolchain.toml)
-[![Fuzzing](https://img.shields.io/badge/libFuzzer%20%C2%B7%20AFL%2B%2B-21%20targets-blue)](#-fuzz-targets)
+[![Fuzzing](https://img.shields.io/badge/libFuzzer%20%C2%B7%20AFL%2B%2B-22%20targets-blue)](#-fuzz-targets)
 [![Mutation testing](https://img.shields.io/badge/cargo--mutants-enabled-green)](.github/workflows/mutants.yml)
 [![License](https://img.shields.io/badge/license-MIT-lightgrey)](LICENSE-MIT)
 
@@ -31,7 +31,7 @@ lez-fuzzing/
 │       └── generators.rs       # Arbitrary / proptest strategies
 ├── fuzz/                   # cargo-fuzz crate (own [workspace] sentinel)
 │   ├── Cargo.toml
-│   ├── fuzz_targets/       # 21 targets total — see table below
+│   ├── fuzz_targets/       # 22 targets total — see table below
 │   │   ├── _template.rs    # Template for `just new-target`
 │   │   └── fuzz_*.rs
 │   └── corpus/             # Curated seed inputs (one dir per target)
@@ -131,6 +131,7 @@ just fuzz-props
 | 19 | `fuzz_encoding_privacy_preserving` | Privacy-preserving encoding: MessageEncodingRoundtrip + TxEncodingDeterministic/NonEmpty |
 | 20 | `fuzz_nullifier_set_roundtrip` | `NullifierSet` Borsh serialisation: NullifierSetRoundtrip (decode→encode identity for the hand-written impl) |
 | 21 | `fuzz_privacy_preserving_state_transition` | Path B — `NSSATransaction::PrivacyPreserving` through `execute_check_on_state` with a dev-mode passing proof: reaches commitment/nullifier checks 5–6 + `apply_state_diff`. Asserts no-panic, StateIsolationOnFailure, PrivateStateIsolationOnFailure, CommitmentInsertion, NonceIncrementCorrectness, PostStateApplied, ReplayRejection (balance conservation intentionally not asserted — the fake proof bypasses the circuit guarantee) |
+| 22 | `fuzz_transaction_ordering_independence` | Transaction ordering-independence on the shielded path: builds a *nullifier-conflicting* pair (two distinct privacy-preserving txs declaring the same nullifier) and applies it in both orders on independent clones of a seeded state, at an identical `(block_id, timestamp)`. Asserts **NoDoubleSpend** (neither ordering accepts both — the shared nullifier is spendable at most once) and **OrderIndependentAcceptance** (the count of accepted txs is the same in both orderings). The nullifier check is enforced by the state machine, not the circuit, so the dev-mode fake proof does not mask it. Requires `RISC0_DEV_MODE=1` |
 
 Each target lives at `fuzz/fuzz_targets/<name>.rs`.
 
@@ -167,13 +168,19 @@ cp fuzz/artifacts/fuzz_state_transition/crash-abc123-minimised \
 ## ➕ Adding a New Target
 
 ```bash
-# Scaffold everything automatically (corpus dir, .rs file, Cargo.toml entry, CI matrix entry)
+# Scaffold everything automatically (corpus dir, .rs file, Cargo.toml entry)
 just new-target my_feature   # creates fuzz_my_feature
 ```
 
 `just new-target` calls [`scripts/add_fuzz_target.py`](scripts/add_fuzz_target.py), which
-appends the `[[bin]]` entry to [`fuzz/Cargo.toml`](fuzz/Cargo.toml) and inserts the target
-into every strategy matrix in [`.github/workflows/fuzz.yml`](.github/workflows/fuzz.yml).
+appends the `[[bin]]` entry to [`fuzz/Cargo.toml`](fuzz/Cargo.toml) — the **single source of
+truth**. Every workflow and script derives its target list from that file at runtime (the CI
+matrices and build loops via the [`resolve-targets`](.github/actions/resolve-targets)
+composite action, and [`scripts/mutants-corpus-test.sh`](scripts/mutants-corpus-test.sh) via
+an inline parse), so **no CI edits are needed**. The only manual step is a prose row in the
+target tables of `README.md` and [`docs/fuzzing.md`](docs/fuzzing.md);
+[`scripts/check_target_inventory.py`](scripts/check_target_inventory.py) (run in CI) fails the
+build if either table drifts from `fuzz/Cargo.toml`.
 
 ---
 

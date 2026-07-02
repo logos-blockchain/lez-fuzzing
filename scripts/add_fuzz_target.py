@@ -1,24 +1,26 @@
 #!/usr/bin/env python3
-"""Fully automates registering a new cargo-fuzz / AFL++ fuzz target.
+"""Register a new cargo-fuzz / AFL++ fuzz target.
 
 Usage:
     python3 scripts/add_fuzz_target.py <TARGET_NAME>
 
 Where TARGET_NAME is the full binary name, e.g. fuzz_my_feature.
 
-Actions performed:
-  1. Appends a [[bin]] entry to fuzz/Cargo.toml (one entry covers BOTH
-     the libFuzzer lane and the AFL++ lane — no separate Cargo.toml needed)
-  2. Inserts TARGET_NAME into every YAML matrix block in
-     .github/workflows/fuzz.yml  (smoke-fuzz, regression)
-  3. Inserts TARGET_NAME into the perf-baseline shell for-loop in
-     .github/workflows/fuzz.yml
+A single `[[bin]]` entry in fuzz/Cargo.toml is the source of truth for BOTH
+engines and for every workflow/script: the CI matrices and build loops derive
+their target lists from fuzz/Cargo.toml at runtime (via the
+`.github/actions/resolve-targets` composite action, or an inline parse in
+`scripts/mutants-corpus-test.sh`). Appending the `[[bin]]` is therefore all this
+script needs to do — no workflow editing.
 
-NOTE: A single fuzz/Cargo.toml is the source of truth for both engines.
   - libFuzzer build:  cargo fuzz build <TARGET>
   - AFL++ build:      cd fuzz && cargo afl build \\
                         --no-default-features --features fuzzer-afl \\
                         --release --bin <TARGET>
+
+The only remaining manual step is the human-authored target tables in README.md
+and docs/fuzzing.md, which carry a prose description per target that cannot be
+auto-generated. `scripts/check_target_inventory.py` (run in CI) guards those.
 
 Run from the repository root.
 """
@@ -49,107 +51,6 @@ def append_cargo_bin(target: str, cargo_toml: Path) -> None:
     print(f"  [+] fuzz/Cargo.toml  — added [[bin]] {target!r}")
 
 
-def insert_into_yaml_matrices(target: str, content: str) -> tuple[str, int]:
-    """Insert target into YAML strategy matrix blocks.
-
-    Matches blocks of the form::
-
-        target:
-          - fuzz_a
-          - fuzz_b
-
-    and appends ``          - <target>`` after the last existing entry.
-    """
-    pattern = re.compile(
-        r"(        target:\n(?:          - fuzz_\w+\n)+)",
-        re.MULTILINE,
-    )
-
-    def add_target(m: re.Match) -> str:
-        return m.group(0) + f"          - {target}\n"
-
-    new_content, count = pattern.subn(add_target, content)
-    return new_content, count
-
-
-def insert_into_shell_loop(target: str, content: str) -> tuple[str, int]:
-    """Insert target into a 'for target in ... ; do' shell loop.
-
-    The last entry in the loop ends with ``; do``.  We change it to end with
-    a backslash continuation and append the new entry with ``; do``.
-
-    Example — before::
-
-              fuzz_block_verification; do
-
-    After::
-
-              fuzz_block_verification \\
-              fuzz_new_target; do
-    """
-    # Match the last fuzz target in the for-loop: "            fuzz_xxx; do"
-    # Indentation: 12 spaces (inside a run: | block).
-    pattern = re.compile(r"(            fuzz_\w+)(; do)", re.MULTILINE)
-
-    # We only want to replace the *last* occurrence (the closing entry).
-    matches = list(pattern.finditer(content))
-    if not matches:
-        return content, 0
-
-    if len(matches) > 1:
-        print(
-            f"  ERROR: found {len(matches)} shell loops matching the pattern; "
-            "cannot determine which one to update. "
-            "Please edit .github/workflows/fuzz.yml manually.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    m = matches[-1]
-    replacement = f"{m.group(1)} \\\n            {target}{m.group(2)}"
-    new_content = content[: m.start()] + replacement + content[m.end() :]
-    return new_content, 1
-
-
-def insert_into_workflow(target: str, workflow: Path) -> None:
-    """Update all target lists in the fuzz workflow file."""
-    content = workflow.read_text()
-
-    if target in content:
-        print(f"  SKIP .github/workflows/fuzz.yml — {target!r} already present")
-        return
-
-    # 1. YAML matrix blocks (smoke-fuzz, regression)
-    content, yaml_count = insert_into_yaml_matrices(target, content)
-    if yaml_count:
-        print(
-            f"  [+] .github/workflows/fuzz.yml — inserted {target!r} into "
-            f"{yaml_count} YAML matrix block(s)"
-        )
-    else:
-        print(
-            f"  ERROR: no YAML matrix blocks matched in {workflow} — please edit manually",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    # 2. Shell for-loop (perf-baseline)
-    content, loop_count = insert_into_shell_loop(target, content)
-    if loop_count:
-        print(
-            f"  [+] .github/workflows/fuzz.yml — inserted {target!r} into "
-            f"perf-baseline shell loop"
-        )
-    else:
-        print(
-            f"  ERROR: perf-baseline shell loop not found in {workflow} — please edit manually",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    workflow.write_text(content)
-
-
 def main() -> None:
     if len(sys.argv) != 2:
         print(f"Usage: {sys.argv[0]} <TARGET_NAME>", file=sys.stderr)
@@ -167,17 +68,11 @@ def main() -> None:
     root = Path(__file__).parent.parent  # repository root
 
     cargo_toml = root / "fuzz" / "Cargo.toml"
-    workflow = root / ".github" / "workflows" / "fuzz.yml"
-
     if not cargo_toml.exists():
         print(f"ERROR: {cargo_toml} not found", file=sys.stderr)
         sys.exit(1)
-    if not workflow.exists():
-        print(f"ERROR: {workflow} not found", file=sys.stderr)
-        sys.exit(1)
 
     append_cargo_bin(target, cargo_toml)
-    insert_into_workflow(target, workflow)
 
     # ── Print build instructions ──────────────────────────────────────────────
     print()
@@ -197,13 +92,11 @@ def main() -> None:
     print("  4. Run with libFuzzer:  just fuzz-one", target)
     print("     Run with AFL++:      just fuzz-afl", target)
     print()
-    print("  5. This script only edits .github/workflows/fuzz.yml. Add the")
-    print("     target to the other enumeration sites too, then verify with:")
+    print("  5. Every workflow and script derives its target list from")
+    print("     fuzz/Cargo.toml, so no CI edits are needed. Only add a prose row")
+    print("     to the two doc tables, then verify with:")
     print("       python3 scripts/check_target_inventory.py")
     print("     (the same check runs in CI and will fail the build on drift):")
-    print("       .github/workflows/fuzz-afl.yml")
-    print("       .github/workflows/mutants.yml")
-    print("       scripts/mutants-corpus-test.sh")
     print("       README.md, docs/fuzzing.md")
 
 

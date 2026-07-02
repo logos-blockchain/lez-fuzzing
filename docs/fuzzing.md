@@ -130,6 +130,7 @@ just fuzz-regression
 | `fuzz_encoding_privacy_preserving` | Privacy-preserving encoding: **MessageEncodingRoundtrip**, **TxEncodingDeterministic** / **NonEmpty** | `fuzz/fuzz_targets/fuzz_encoding_privacy_preserving.rs` |
 | `fuzz_nullifier_set_roundtrip` | `NullifierSet` Borsh serialisation: **NullifierSetRoundtrip** (decode→encode identity for the hand-written impl) | `fuzz/fuzz_targets/fuzz_nullifier_set_roundtrip.rs` |
 | `fuzz_privacy_preserving_state_transition` | Path B — `NSSATransaction::PrivacyPreserving` through `execute_check_on_state` with a dev-mode passing proof, reaching checks 5–6 (`check_commitments_are_new` / `check_nullifiers_are_valid`) and `apply_state_diff`: **No panic**, **StateIsolationOnFailure**, **PrivateStateIsolationOnFailure**, **CommitmentInsertion**, **NonceIncrementCorrectness**, **PostStateApplied**, **ReplayRejection**. Balance conservation is intentionally *not* asserted — the synthesised fake receipt bypasses the circuit guarantee. Requires `RISC0_DEV_MODE=1` | `fuzz/fuzz_targets/fuzz_privacy_preserving_state_transition.rs` |
+| `fuzz_transaction_ordering_independence` | Ordering-independence for the shielded path — the only target that compares two *orderings* of the same transactions rather than one fixed order. `arb_conflicting_nullifier_pair` builds two distinct privacy-preserving txs declaring the **same** nullifier; they are applied in both orders (`B→C` and `C→B`) on independent clones of a commitment-seeded state, at an identical `(block_id, timestamp)` so order is the only variable. Asserts **NoDoubleSpend** (a shared nullifier is spendable at most once per ordering) and **OrderIndependentAcceptance** (the number of accepted txs is order-invariant). The nullifier guard is a state-machine check, not a circuit check, so the dev-mode fake receipt does not mask a violation. Requires `RISC0_DEV_MODE=1` | `fuzz/fuzz_targets/fuzz_transaction_ordering_independence.rs` |
 
 ---
 
@@ -147,8 +148,7 @@ This single command does four things automatically:
 |---|---|
 | Creates the corpus directory | `fuzz/corpus/fuzz_my_feature/` |
 | Writes a typed fuzz target template | `fuzz/fuzz_targets/fuzz_my_feature.rs` |
-| Appends `[[bin]]` entry to `fuzz/Cargo.toml` | Covers **both** the libFuzzer and AFL++ lanes |
-| Inserts target into every CI matrix + perf loop | `.github/workflows/fuzz.yml` |
+| Appends `[[bin]]` entry to `fuzz/Cargo.toml` | Covers **both** the libFuzzer and AFL++ lanes — and every workflow/script, which derive their target lists from this file |
 
 The generated template uses `fuzz_props::fuzz_entry!` and works with both engines
 without modification.
@@ -164,16 +164,26 @@ structured input, or the proptest generators from
 ### Step 3 — Automated registration (cargo-fuzz + CI)
 
 `just new-target` calls [`scripts/add_fuzz_target.py`](../scripts/add_fuzz_target.py)
-which:
-- Appends the `[[bin]]` entry to [`fuzz/Cargo.toml`](../fuzz/Cargo.toml).
-  This **single entry** covers both the libFuzzer lane (`cargo fuzz build`) and
-  the AFL++ lane (`cargo afl build --no-default-features --features fuzzer-afl`).
-- Inserts the target name into every strategy matrix and the perf-baseline shell
-  loop in [`.github/workflows/fuzz.yml`](../.github/workflows/fuzz.yml).
+which appends the `[[bin]]` entry to [`fuzz/Cargo.toml`](../fuzz/Cargo.toml). This
+**single entry** covers both the libFuzzer lane (`cargo fuzz build`) and the AFL++
+lane (`cargo afl build --no-default-features --features fuzzer-afl`) — and it is the
+**single source of truth** every workflow and script reads at runtime:
+
+- The CI matrices and build loops (`fuzz.yml`, `fuzz-afl.yml`, `corpus-update.yml`,
+  `mutants.yml`) resolve their target list through the
+  [`resolve-targets`](../.github/actions/resolve-targets) composite action, which
+  parses `fuzz/Cargo.toml`.
+- [`scripts/mutants-corpus-test.sh`](../scripts/mutants-corpus-test.sh) parses the
+  same file inline.
+
+So a new `[[bin]]` needs **no workflow edits** — the only hand-authored places are the
+prose target tables in this file and `README.md`, which
+[`scripts/check_target_inventory.py`](../scripts/check_target_inventory.py) (run in CI)
+checks against `fuzz/Cargo.toml`.
 
 > [!TIP]
 > **Manual fallback:** if you create a target without `just new-target`, add the
-> entry yourself:
+> entry yourself — that alone wires it into every lane:
 >
 > ```toml
 > [[bin]]
@@ -206,7 +216,8 @@ cd fuzz && cargo afl build \
 | `fuzz/corpus/fuzz_<name>/` | Create | ✅ `just new-target` |
 | `fuzz/Cargo.toml` | Add `[[bin]]` (covers both lanes) | ✅ `just new-target` |
 | `Justfile` | Nothing — auto-discovers | ✅ automatic |
-| `.github/workflows/fuzz.yml` | Add to 3 matrix lists | ✅ `just new-target` |
+| `.github/workflows/*.yml`, `scripts/mutants-corpus-test.sh` | Nothing — target lists derive from `fuzz/Cargo.toml` | ✅ automatic |
+| `README.md`, `docs/fuzzing.md` | Add a prose row to the target table | ⚠️ manual (CI-gated by `check_target_inventory.py`) |
 
 ---
 
@@ -377,8 +388,8 @@ The nightly AFL++ CI workflow has two jobs:
 
 | Job | Triggers | Matrix |
 |-----|----------|--------|
-| `afl-smoke` | nightly + `workflow_dispatch` | all 21 targets, 60 s each |
-| `afl-coverage-aggregate` | nightly, `needs: afl-smoke` | all 21 targets merged into one LLVM HTML report |
+| `afl-smoke` | nightly + `workflow_dispatch` | all 22 targets, 60 s each |
+| `afl-coverage-aggregate` | nightly, `needs: afl-smoke` | all 22 targets merged into one LLVM HTML report |
 
 The smoke job (one matrix leg per target, on `ubuntu-latest`):
 1. Builds AFL++ from source, then builds the target with `cargo afl build --no-default-features --features fuzzer-afl`
@@ -388,7 +399,7 @@ The smoke job (one matrix leg per target, on `ubuntu-latest`):
 
 The coverage-aggregate job:
 1. Downloads every smoke leg's findings
-2. Rebuilds all 21 targets with `RUSTFLAGS="-C instrument-coverage"`
+2. Rebuilds all 22 targets with `RUSTFLAGS="-C instrument-coverage"`
 3. Runs all checked-in corpus + AFL queue inputs through each binary
 4. Merges every `.profraw` → one `.profdata` → a single combined HTML report via `llvm-cov show`
 
@@ -622,6 +633,7 @@ Measured on a 4-core x86_64 Linux runner with `RISC0_DEV_MODE=1`:
 | `fuzz_encoding_privacy_preserving` | ~50 000 exec/sec *(estimate)* |
 | `fuzz_nullifier_set_roundtrip` | ~100 000 exec/sec *(estimate)* |
 | `fuzz_privacy_preserving_state_transition` | slow — dev-mode proof synthesis + verification per exec dominates runtime *(estimate)* |
+| `fuzz_transaction_ordering_independence` | slow — seeds the commitment set, then synthesises proofs and executes the conflicting pair in both orderings per exec *(estimate)* |
 
 > [!NOTE]
 > Throughput figures for the five new targets are rough estimates; run `just perf-baseline`

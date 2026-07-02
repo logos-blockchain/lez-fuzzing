@@ -139,23 +139,18 @@ jobs:
       - name: Make corpus-regression wrapper executable
         run: chmod +x scripts/mutants-corpus-test.sh
 
-      # Build all 20 fuzz targets once before the mutation loop so that each
-      # mutant only needs to rebuild the mutated crate, not the fuzz harness.
-      # Keep this list in sync with scripts/mutants-corpus-test.sh.
+      # Resolve the target list from fuzz/Cargo.toml (the single source of truth)
+      # so this workflow needs no hand-maintained list; scripts/mutants-corpus-test.sh
+      # parses the same file, so the two stay in sync automatically.
+      - name: Resolve fuzz target matrix
+        id: list
+        uses: ./.github/actions/resolve-targets
+
+      # Build every fuzz target once before the mutation loop so that each mutant
+      # only needs to rebuild the mutated crate, not the fuzz harness.
       - name: Pre-build fuzz targets
         run: |
-          for target in \
-            fuzz_transaction_decoding fuzz_stateless_verification \
-            fuzz_state_transition fuzz_block_verification \
-            fuzz_encoding_roundtrip fuzz_signature_verification \
-            fuzz_replay_prevention fuzz_state_diff_computation \
-            fuzz_validate_execute_consistency fuzz_state_serialization \
-            fuzz_witness_set_verification fuzz_program_deployment_lifecycle \
-            fuzz_apply_state_diff_split_path fuzz_multi_block_state_sequence \
-            fuzz_sequencer_vs_replayer fuzz_merkle_tree \
-            fuzz_transaction_properties fuzz_privacy_preserving_witness \
-            fuzz_encoding_privacy_preserving fuzz_nullifier_set_roundtrip \
-            fuzz_privacy_preserving_state_transition; do
+          for target in $(jq -r '.[]' <<< '${{ steps.list.outputs.targets }}'); do
             cargo fuzz build "${target}"
           done
 
