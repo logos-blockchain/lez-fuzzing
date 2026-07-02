@@ -49,6 +49,7 @@ jobs:
           - fuzz_encoding_privacy_preserving
           - fuzz_nullifier_set_roundtrip
           - fuzz_privacy_preserving_state_transition
+          - fuzz_transaction_ordering_independence
     steps:
       - uses: actions/checkout@v4
 
@@ -227,6 +228,7 @@ jobs:
           - fuzz_encoding_privacy_preserving
           - fuzz_nullifier_set_roundtrip
           - fuzz_privacy_preserving_state_transition
+          - fuzz_transaction_ordering_independence
     steps:
       - uses: actions/checkout@v4
       - name: Checkout logos-execution-zone

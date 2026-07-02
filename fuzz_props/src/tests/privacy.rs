@@ -1,8 +1,9 @@
 use arbitrary::Unstructured;
 
-use crate::generators::FuzzAccount;
+use crate::generators::{FuzzAccount, account_id_for_key};
 use crate::privacy::{
-    arb_account, arb_privacy_preserving_tx, arb_validity_window, synthesize_passing_proof,
+    arb_account, arb_conflicting_nullifier_pair, arb_privacy_preserving_tx, arb_validity_window,
+    synthesize_passing_proof,
 };
 use nssa::privacy_preserving_transaction::{Message as PPMessage, WitnessSet as PPWitnessSet};
 use nssa::{AccountId, PrivacyPreservingTransaction, PrivateKey};
@@ -477,4 +478,141 @@ fn arb_privacy_preserving_tx_generator_invariants() {
         garbage * 16 >= oks,
         "garbage-proof rate {garbage}/{oks} is below 1/16 (expected ~1/8)"
     );
+}
+
+// ── arb_conflicting_nullifier_pair ──────────────────────────────────────────────────────
+// The pair builder underpins `fuzz_transaction_ordering_independence`: it must always yield
+// two transactions that use *distinct* signers (so a rejection of the second application is
+// attributable to the shared nullifier, not a nonce clash) and index only within the account
+// set. These tests pin the account-count guard, the collision-repair branch, and the modular
+// index arithmetic.
+
+/// `n` distinct keyed fuzz accounts (`[1; 32]`, `[2; 32]`, …). Distinct nonzero scalars give
+/// distinct keys and therefore distinct key-derived signer ids.
+fn keyed_accounts(n: u8) -> Vec<FuzzAccount> {
+    (1..=n)
+        .map(|i| FuzzAccount {
+            account_id: AccountId::new([i; 32]),
+            balance: 1_000_000,
+            private_key: PrivateKey::try_new([i; 32]).expect("nonzero scalar is a valid key"),
+        })
+        .collect()
+}
+
+/// The key-derived signer ids the validator would recover from a transaction's witness set.
+fn signer_ids(tx: &PrivacyPreservingTransaction) -> Vec<AccountId> {
+    tx.witness_set()
+        .signatures_and_public_keys()
+        .iter()
+        .map(|(_, pk)| AccountId::from(pk))
+        .collect()
+}
+
+/// The builder needs two distinct accounts: fewer than two is always rejected (before any
+/// index arithmetic runs), exactly two always succeeds. This pins the `accounts.len() < 2`
+/// guard against `==` / `>` / `<=` mutations.
+#[test]
+fn arb_conflicting_nullifier_pair_requires_two_accounts() {
+    let accounts = keyed_accounts(2);
+    let genesis: Vec<(AccountId, u128)> =
+        accounts.iter().map(|a| (a.account_id, a.balance)).collect();
+    let state = crate::genesis::genesis_state(&genesis, vec![]);
+
+    let mut rng = Rng::new();
+    let mut buf = vec![0_u8; 512];
+    rng.fill(&mut buf);
+
+    // Zero accounts: rejected by the guard. A guard mutated to `== 2` / `> 2` would fall
+    // through and divide by `accounts.len() == 0`, panicking — also a failure this catches.
+    let mut u0 = Unstructured::new(&buf);
+    assert!(
+        arb_conflicting_nullifier_pair(&mut u0, &state, &[]).is_err(),
+        "an empty account set must be rejected"
+    );
+    // One account: still rejected — there is no room for two distinct signers.
+    let mut u1 = Unstructured::new(&buf);
+    assert!(
+        arb_conflicting_nullifier_pair(&mut u1, &state, &accounts[..1]).is_err(),
+        "a single-account set must be rejected"
+    );
+    // Two accounts: must succeed. A guard mutated to `== 2` / `<= 2` would reject this.
+    let mut u2 = Unstructured::new(&buf);
+    assert!(
+        arb_conflicting_nullifier_pair(&mut u2, &state, &accounts).is_ok(),
+        "two distinct accounts must yield a pair"
+    );
+}
+
+/// When both index bytes select the same account (`i == j`), the repair branch
+/// `j = (i + 1) % len` must pick the *other* account so the pair keeps distinct signers.
+/// Forcing `i == j == 0` over two accounts exercises that branch: the only correct outcome is
+/// signers `{account 0, account 1}`. This pins the `j == i` test, the `(i + 1) % len` repair,
+/// and the two distinctness guards (`== 2` mutations of them all reject this otherwise-valid
+/// input, and the arithmetic mutations either repair to `j == i` again or index out of range).
+#[test]
+fn arb_conflicting_nullifier_pair_repairs_colliding_indices() {
+    let accounts = keyed_accounts(2);
+    let genesis: Vec<(AccountId, u128)> =
+        accounts.iter().map(|a| (a.account_id, a.balance)).collect();
+    let state = crate::genesis::genesis_state(&genesis, vec![]);
+
+    let mut rng = Rng::new();
+    let mut buf = vec![0_u8; 512];
+    rng.fill(&mut buf);
+    // The first two bytes are the `i` and `j` index draws; zero both so `i == j == 0`.
+    buf[0] = 0;
+    buf[1] = 0;
+
+    let mut u = Unstructured::new(&buf);
+    let (tx_b, tx_c) = arb_conflicting_nullifier_pair(&mut u, &state, &accounts)
+        .expect("colliding indices must be repaired into two distinct signers, not rejected");
+
+    let sb = signer_ids(&tx_b);
+    let sc = signer_ids(&tx_c);
+    assert_eq!(sb.len(), 1, "tx_b must carry exactly one signer");
+    assert_eq!(sc.len(), 1, "tx_c must carry exactly one signer");
+    assert_ne!(
+        sb[0], sc[0],
+        "a conflicting pair must use two distinct signers"
+    );
+
+    let known: std::collections::HashSet<AccountId> = accounts
+        .iter()
+        .map(|a| account_id_for_key(&a.private_key))
+        .collect();
+    assert!(
+        known.contains(&sb[0]) && known.contains(&sc[0]),
+        "both signers must be drawn from the account set"
+    );
+}
+
+/// Over many random inputs the index arithmetic must stay within the account slice. A `% len`
+/// mutated to `/ len` or `+ len` computes an out-of-range index and panics on `accounts[i]`;
+/// the modulo keeps every draw in range and the two signers distinct.
+#[test]
+fn arb_conflicting_nullifier_pair_indexes_in_range() {
+    let accounts = keyed_accounts(2);
+    let genesis: Vec<(AccountId, u128)> =
+        accounts.iter().map(|a| (a.account_id, a.balance)).collect();
+    let state = crate::genesis::genesis_state(&genesis, vec![]);
+    let known: std::collections::HashSet<AccountId> = accounts
+        .iter()
+        .map(|a| account_id_for_key(&a.private_key))
+        .collect();
+
+    let mut rng = Rng::new();
+    let mut buf = vec![0_u8; 512];
+    for _ in 0..500_usize {
+        rng.fill(&mut buf);
+        let mut u = Unstructured::new(&buf);
+        let (tx_b, tx_c) = arb_conflicting_nullifier_pair(&mut u, &state, &accounts)
+            .expect("two distinct accounts always yield a pair");
+        let sb = signer_ids(&tx_b);
+        let sc = signer_ids(&tx_c);
+        assert_ne!(sb[0], sc[0], "conflicting-pair signers must be distinct");
+        assert!(
+            known.contains(&sb[0]) && known.contains(&sc[0]),
+            "signers must be drawn from the account set"
+        );
+    }
 }

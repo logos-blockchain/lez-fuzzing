@@ -321,3 +321,89 @@ pub fn arb_privacy_preserving_tx(
     let witness_set = PPWitnessSet::for_message(&message, proof, &keys);
     Ok(PrivacyPreservingTransaction::new(message, witness_set))
 }
+
+/// Build a minimal *pure-private* transaction: one signer, no public accounts, the given
+/// commitments and nullifiers, and unbounded validity windows.
+///
+/// Two properties matter for the ordering-independence oracle in
+/// `fuzz_transaction_ordering_independence`:
+///
+/// * **`public_account_ids` is empty**, so `synthesize_passing_proof` reconstructs an empty
+///   `public_pre_states` and the journal does not depend on live chain state. The proof
+///   therefore stays valid at check 4 even after another transaction has mutated the state —
+///   i.e. it is valid whether this tx is applied *first* or *second*. That is what lets us
+///   apply the same transaction in both orderings and compare outcomes soundly.
+/// * The single signer's nonce is read live from `state`, so check 3c passes by construction
+///   at first application; because the paired transaction uses a *different* signer, this
+///   signer's nonce is untouched when this tx is applied second — so any rejection of the
+///   second application is attributable to the shared nullifier, not to a nonce mismatch.
+fn build_pure_private_tx(
+    state: &V03State,
+    key: &PrivateKey,
+    new_commitments: Vec<Commitment>,
+    new_nullifiers: Vec<(Nullifier, CommitmentSetDigest)>,
+) -> PrivacyPreservingTransaction {
+    let signer_id = account_id_for_key(key);
+    let message = PPMessage {
+        public_account_ids: Vec::new(),
+        nonces: vec![state.get_account_by_id(signer_id).nonce],
+        public_post_states: Vec::new(),
+        encrypted_private_post_states: Vec::new(),
+        new_commitments,
+        new_nullifiers,
+        block_validity_window: ValidityWindow::new_unbounded(),
+        timestamp_validity_window: ValidityWindow::new_unbounded(),
+    };
+    let proof = synthesize_passing_proof(&message, state, &[signer_id]);
+    let witness_set = PPWitnessSet::for_message(&message, proof, &[key]);
+    PrivacyPreservingTransaction::new(message, witness_set)
+}
+
+/// Build a **nullifier-conflicting pair**: two *distinct* privacy-preserving transactions
+/// (different signers, different fresh commitments) that both declare the **same** nullifier.
+///
+/// The shared nullifier's digest is bound to the current commitment-set root
+/// (`state.commitment_set_digest()`); this only satisfies check 6's `root_history` membership
+/// once a commitment-bearing transaction has already grown the set, so callers should seed the
+/// state first (see the target). The two transactions are otherwise independently valid, so a
+/// correct state machine must accept *at most one* of them regardless of application order —
+/// the property the ordering-independence target asserts.
+///
+/// Returns `Err` when there are fewer than two distinct keyed accounts to draw signers from.
+pub fn arb_conflicting_nullifier_pair(
+    u: &mut Unstructured<'_>,
+    state: &V03State,
+    accounts: &[FuzzAccount],
+) -> ArbResult<(PrivacyPreservingTransaction, PrivacyPreservingTransaction)> {
+    if accounts.len() < 2 {
+        return Err(arbitrary::Error::IncorrectFormat);
+    }
+    // Two distinct signer accounts so the pair's nonce checks are independent.
+    let i = (u8::arbitrary(u)? as usize) % accounts.len();
+    let mut j = (u8::arbitrary(u)? as usize) % accounts.len();
+    if j == i {
+        j = (i + 1) % accounts.len();
+    }
+    let key_b = &accounts[i].private_key;
+    let key_c = &accounts[j].private_key;
+    if account_id_for_key(key_b) == account_id_for_key(key_c) {
+        return Err(arbitrary::Error::IncorrectFormat);
+    }
+
+    // One nullifier, shared by both transactions, bound to a historical commitment-set root.
+    let root = state.commitment_set_digest();
+    let null_aid = AccountId::new(<[u8; 32]>::arbitrary(u)?);
+    let shared_nullifiers = vec![(Nullifier::for_account_initialization(&null_aid), root)];
+
+    // Distinct fresh commitments make the two transactions genuinely different (and keep them
+    // from colliding with each other on check 5).
+    let comm_b = Commitment::new(&AccountId::new(<[u8; 32]>::arbitrary(u)?), &arb_account(u)?);
+    let comm_c = Commitment::new(&AccountId::new(<[u8; 32]>::arbitrary(u)?), &arb_account(u)?);
+    if comm_b == comm_c {
+        return Err(arbitrary::Error::IncorrectFormat);
+    }
+
+    let tx_b = build_pure_private_tx(state, key_b, vec![comm_b], shared_nullifiers.clone());
+    let tx_c = build_pure_private_tx(state, key_c, vec![comm_c], shared_nullifiers);
+    Ok((tx_b, tx_c))
+}

@@ -47,6 +47,7 @@ jobs:
           fuzz_encoding_privacy_preserving
           fuzz_nullifier_set_roundtrip
           fuzz_privacy_preserving_state_transition
+          fuzz_transaction_ordering_independence
           EOF
           )
           echo "targets=$targets" >> "$GITHUB_OUTPUT"
