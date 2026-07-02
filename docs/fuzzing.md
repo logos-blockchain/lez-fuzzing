@@ -130,6 +130,7 @@ just fuzz-regression
 | `fuzz_encoding_privacy_preserving` | Privacy-preserving encoding: **MessageEncodingRoundtrip**, **TxEncodingDeterministic** / **NonEmpty** | `fuzz/fuzz_targets/fuzz_encoding_privacy_preserving.rs` |
 | `fuzz_nullifier_set_roundtrip` | `NullifierSet` Borsh serialisation: **NullifierSetRoundtrip** (decode→encode identity for the hand-written impl) | `fuzz/fuzz_targets/fuzz_nullifier_set_roundtrip.rs` |
 | `fuzz_privacy_preserving_state_transition` | Path B — `NSSATransaction::PrivacyPreserving` through `execute_check_on_state` with a dev-mode passing proof, reaching checks 5–6 (`check_commitments_are_new` / `check_nullifiers_are_valid`) and `apply_state_diff`: **No panic**, **StateIsolationOnFailure**, **PrivateStateIsolationOnFailure**, **CommitmentInsertion**, **NonceIncrementCorrectness**, **PostStateApplied**, **ReplayRejection**. Balance conservation is intentionally *not* asserted — the synthesised fake receipt bypasses the circuit guarantee. Requires `RISC0_DEV_MODE=1` | `fuzz/fuzz_targets/fuzz_privacy_preserving_state_transition.rs` |
+| `fuzz_transaction_ordering_independence` | Ordering-independence for the shielded path — the only target that compares two *orderings* of the same transactions rather than one fixed order. `arb_conflicting_nullifier_pair` builds two distinct privacy-preserving txs declaring the **same** nullifier; they are applied in both orders (`B→C` and `C→B`) on independent clones of a commitment-seeded state, at an identical `(block_id, timestamp)` so order is the only variable. Asserts **NoDoubleSpend** (a shared nullifier is spendable at most once per ordering) and **OrderIndependentAcceptance** (the number of accepted txs is order-invariant). The nullifier guard is a state-machine check, not a circuit check, so the dev-mode fake receipt does not mask a violation. Requires `RISC0_DEV_MODE=1` | `fuzz/fuzz_targets/fuzz_transaction_ordering_independence.rs` |
 
 ---
 
@@ -377,8 +378,8 @@ The nightly AFL++ CI workflow has two jobs:
 
 | Job | Triggers | Matrix |
 |-----|----------|--------|
-| `afl-smoke` | nightly + `workflow_dispatch` | all 21 targets, 60 s each |
-| `afl-coverage-aggregate` | nightly, `needs: afl-smoke` | all 21 targets merged into one LLVM HTML report |
+| `afl-smoke` | nightly + `workflow_dispatch` | all 22 targets, 60 s each |
+| `afl-coverage-aggregate` | nightly, `needs: afl-smoke` | all 22 targets merged into one LLVM HTML report |
 
 The smoke job (one matrix leg per target, on `ubuntu-latest`):
 1. Builds AFL++ from source, then builds the target with `cargo afl build --no-default-features --features fuzzer-afl`
@@ -388,7 +389,7 @@ The smoke job (one matrix leg per target, on `ubuntu-latest`):
 
 The coverage-aggregate job:
 1. Downloads every smoke leg's findings
-2. Rebuilds all 21 targets with `RUSTFLAGS="-C instrument-coverage"`
+2. Rebuilds all 22 targets with `RUSTFLAGS="-C instrument-coverage"`
 3. Runs all checked-in corpus + AFL queue inputs through each binary
 4. Merges every `.profraw` → one `.profdata` → a single combined HTML report via `llvm-cov show`
 
@@ -622,6 +623,7 @@ Measured on a 4-core x86_64 Linux runner with `RISC0_DEV_MODE=1`:
 | `fuzz_encoding_privacy_preserving` | ~50 000 exec/sec *(estimate)* |
 | `fuzz_nullifier_set_roundtrip` | ~100 000 exec/sec *(estimate)* |
 | `fuzz_privacy_preserving_state_transition` | slow — dev-mode proof synthesis + verification per exec dominates runtime *(estimate)* |
+| `fuzz_transaction_ordering_independence` | slow — seeds the commitment set, then synthesises proofs and executes the conflicting pair in both orderings per exec *(estimate)* |
 
 > [!NOTE]
 > Throughput figures for the five new targets are rough estimates; run `just perf-baseline`
