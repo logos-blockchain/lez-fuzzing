@@ -163,3 +163,9 @@ name = "fuzz_transaction_ordering_independence"
 path = "fuzz_targets/fuzz_transaction_ordering_independence.rs"
 test = false
 bench = false
+
+[[bin]]
+name = "fuzz_stateful_model_lockstep"
+path = "fuzz_targets/fuzz_stateful_model_lockstep.rs"
+test = false
+bench = false
