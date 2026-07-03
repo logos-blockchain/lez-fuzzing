@@ -131,6 +131,7 @@ just fuzz-regression
 | `fuzz_nullifier_set_roundtrip` | `NullifierSet` Borsh serialisation: **NullifierSetRoundtrip** (decode→encode identity for the hand-written impl) | `fuzz/fuzz_targets/fuzz_nullifier_set_roundtrip.rs` |
 | `fuzz_privacy_preserving_state_transition` | Path B — `NSSATransaction::PrivacyPreserving` through `execute_check_on_state` with a dev-mode passing proof, reaching checks 5–6 (`check_commitments_are_new` / `check_nullifiers_are_valid`) and `apply_state_diff`: **No panic**, **StateIsolationOnFailure**, **PrivateStateIsolationOnFailure**, **CommitmentInsertion**, **NonceIncrementCorrectness**, **PostStateApplied**, **ReplayRejection**. Balance conservation is intentionally *not* asserted — the synthesised fake receipt bypasses the circuit guarantee. Requires `RISC0_DEV_MODE=1` | `fuzz/fuzz_targets/fuzz_privacy_preserving_state_transition.rs` |
 | `fuzz_transaction_ordering_independence` | Ordering-independence for the shielded path — the only target that compares two *orderings* of the same transactions rather than one fixed order. `arb_conflicting_nullifier_pair` builds two distinct privacy-preserving txs declaring the **same** nullifier; they are applied in both orders (`B→C` and `C→B`) on independent clones of a commitment-seeded state, at an identical `(block_id, timestamp)` so order is the only variable. Asserts **NoDoubleSpend** (a shared nullifier is spendable at most once per ordering) and **OrderIndependentAcceptance** (the number of accepted txs is order-invariant). The nullifier guard is a state-machine check, not a circuit check, so the dev-mode fake receipt does not mask a violation. Requires `RISC0_DEV_MODE=1` | `fuzz/fuzz_targets/fuzz_transaction_ordering_independence.rs` |
+| `fuzz_stateful_model_lockstep` | Model-based stateful lockstep — the only target with a predictive oracle. Decodes the input into a schedule of `Transfer` / `AdvanceBlock` / `ReplayLast` commands and steps an independent hand-written reference model of `(balance, nonce)` per account (reimplementing native-transfer accept/reject semantics — nonce equality, `checked_sub`, `checked_add` — without calling `nssa`) in lockstep with the real `V03State`. After *every* command asserts **ModelAcceptanceAgreement** (the real state machine accepts a tx iff the model predicts accept) and **ModelStateAgreement** (every fuzz account's real balance & nonce equals the model). Catches history-dependent acceptance/state drift — a replay wrongly accepted, a nonce that drifts across a sequence, a balance that leaks — that a self-consistent-but-wrong machine would pass. Self-transfers are excluded upstream to keep the oracle exact | `fuzz/fuzz_targets/fuzz_stateful_model_lockstep.rs` |
 
 ---
 
@@ -388,8 +389,8 @@ The nightly AFL++ CI workflow has two jobs:
 
 | Job | Triggers | Matrix |
 |-----|----------|--------|
-| `afl-smoke` | nightly + `workflow_dispatch` | all 22 targets, 60 s each |
-| `afl-coverage-aggregate` | nightly, `needs: afl-smoke` | all 22 targets merged into one LLVM HTML report |
+| `afl-smoke` | nightly + `workflow_dispatch` | all 23 targets, 60 s each |
+| `afl-coverage-aggregate` | nightly, `needs: afl-smoke` | all 23 targets merged into one LLVM HTML report |
 
 The smoke job (one matrix leg per target, on `ubuntu-latest`):
 1. Builds AFL++ from source, then builds the target with `cargo afl build --no-default-features --features fuzzer-afl`
@@ -399,7 +400,7 @@ The smoke job (one matrix leg per target, on `ubuntu-latest`):
 
 The coverage-aggregate job:
 1. Downloads every smoke leg's findings
-2. Rebuilds all 22 targets with `RUSTFLAGS="-C instrument-coverage"`
+2. Rebuilds all 23 targets with `RUSTFLAGS="-C instrument-coverage"`
 3. Runs all checked-in corpus + AFL queue inputs through each binary
 4. Merges every `.profraw` → one `.profdata` → a single combined HTML report via `llvm-cov show`
 
@@ -592,7 +593,7 @@ fuzz target parameters for zero-boilerplate structured fuzzing.
 
 | Generator | Covers |
 |-----------|--------|
-| `arbitrary_fuzz_state()` | 1–8 fuzz-driven accounts with arbitrary IDs, balances, and private keys; used by `fuzz_state_transition`, `fuzz_replay_prevention`, `fuzz_validate_execute_consistency`, `fuzz_state_diff_computation` |
+| `arbitrary_fuzz_state()` | 1–8 fuzz-driven accounts with arbitrary IDs, balances, and private keys; IDs colliding with a reserved system account (faucet, bridge, or clock) or already seen are skipped, since genesis overwrites those and would make a caller read back the wrong balance (harness false positive); used by `fuzz_state_transition`, `fuzz_replay_prevention`, `fuzz_validate_execute_consistency`, `fuzz_state_diff_computation`, `fuzz_stateful_model_lockstep` |
 | `arb_fuzz_native_transfer()` | Correctly-signed native-transfer `LeeTransaction` referencing accounts from an `arbitrary_fuzz_state()` result; gives the fuzzer a path to successful state transitions |
 | `arbitrary_transaction()` | Structured `LeeTransaction` (`Public` or `ProgramDeployment`) from unstructured bytes via `ArbLeeTransaction` |
 | `arb_borsh_transaction_bytes()` | Raw Borsh bytes including invalid encodings |
@@ -634,6 +635,7 @@ Measured on a 4-core x86_64 Linux runner with `RISC0_DEV_MODE=1`:
 | `fuzz_nullifier_set_roundtrip` | ~100 000 exec/sec *(estimate)* |
 | `fuzz_privacy_preserving_state_transition` | slow — dev-mode proof synthesis + verification per exec dominates runtime *(estimate)* |
 | `fuzz_transaction_ordering_independence` | slow — seeds the commitment set, then synthesises proofs and executes the conflicting pair in both orderings per exec *(estimate)* |
+| `fuzz_stateful_model_lockstep` | ~1 000 exec/sec — steps up to 32 commands through the real state machine and reference model per exec *(estimate)* |
 
 > [!NOTE]
 > Throughput figures for the five new targets are rough estimates; run `just perf-baseline`

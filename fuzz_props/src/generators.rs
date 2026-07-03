@@ -79,11 +79,11 @@ pub struct FuzzAccount {
 /// unchanged.  Two failure modes break that:
 ///
 /// * **Reserved system accounts.** [`crate::genesis::genesis_state`] inserts the faucet
-///   account (`balance = u128::MAX`) and bridge account *after* the supplied genesis
-///   accounts, overwriting any generated account whose ID collides.  A fuzzer that
-///   lands on the faucet ID would make a caller read back `u128::MAX` instead of the capped
-///   balance it generated, overflowing the conservation sum — a harness false positive, not
-///   a protocol bug.
+///   account (`balance = u128::MAX`), the bridge account, and the clock accounts *after* the
+///   supplied genesis accounts, overwriting any generated account whose ID collides.  A fuzzer
+///   that lands on the faucet ID would make a caller read back `u128::MAX` instead of the
+///   capped balance it generated, overflowing the conservation sum — a harness false positive,
+///   not a protocol bug.  The clock IDs are equally overwritten, so they are excluded too.
 /// * **Duplicate IDs.** Genesis stores accounts in a `HashMap` keyed by ID, so duplicate
 ///   IDs collapse to a single (last-write-wins) account, while a caller's per-ID balance sum
 ///   double-counts that account's balance.
@@ -93,10 +93,13 @@ pub struct FuzzAccount {
 /// non-reserved IDs whose generated balances match what genesis stores — so `0..=8`
 /// accounts are returned (an empty state is a valid degenerate case).
 pub fn arbitrary_fuzz_state(u: &mut Unstructured<'_>) -> arbitrary::Result<Vec<FuzzAccount>> {
-    let reserved = [
+    let reserved: Vec<AccountId> = [
         system_accounts::faucet_account_id(),
         system_accounts::bridge_account_id(),
-    ];
+    ]
+    .into_iter()
+    .chain(system_accounts::clock_account_ids())
+    .collect();
     let n = ((u8::arbitrary(u)? as usize) % 8) + 1; // 1..=8
 
     let mut seen = std::collections::HashSet::with_capacity(n);
