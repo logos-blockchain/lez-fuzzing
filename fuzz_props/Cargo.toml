@@ -11,7 +11,7 @@ fuzzer-libfuzzer = []
 fuzzer-afl       = []
 
 [dependencies]
-nssa       = { workspace = true }
+nssa       = { workspace = true, features = ["prove"] }
 nssa_core  = { workspace = true }
 common     = { workspace = true }
 borsh      = { workspace = true }
@@ -28,4 +28,3 @@ system_accounts = { workspace = true }
 
 [dev-dependencies]
 proptest = "1.4"
-nssa = { workspace = true, features = ["prove"] }
