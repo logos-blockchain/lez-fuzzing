@@ -1,0 +1,36 @@
+name: Install r0vm
+description: >
+  Install the risc0 `r0vm` executor binary (via rzup) at the version matching the
+  `risc0-zkvm` crate. The fuzz targets are built WITHOUT the risc0 `prove` feature
+  (which would add ~45 min of prover-kernel compilation), so `Program::execute` runs
+  the guest through risc0's `ExternalProver`, which spawns this `r0vm` binary. Without
+  it, every public-transaction execution fails with ENOENT and is spuriously rejected —
+  which surfaces as a `ModelAcceptanceAgreement` crash in the lockstep target.
+
+inputs:
+  version:
+    description: >
+      r0vm version to install. MUST match the `risc0-zkvm` crate version — risc0 looks
+      up r0vm by exact version via rzup, and checks major/minor server compatibility.
+    required: false
+    default: "3.0.5"
+
+runs:
+  using: composite
+  steps:
+    - name: Install rzup and r0vm ${{ inputs.version }}
+      shell: bash
+      env:
+        # Authenticate rzup's GitHub release lookups to avoid unauthenticated rate limits.
+        GITHUB_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        curl -L https://risczero.com/install | bash
+        RZUP="$HOME/.risc0/bin/rzup"
+        # Install only r0vm (not the guest rust/cpp toolchains) at the pinned version.
+        "$RZUP" install r0vm "${{ inputs.version }}"
+        # risc0-zkvm resolves r0vm through the rzup home (~/.risc0); rzup also symlinks
+        # the binary into ~/.cargo/bin. Export both onto PATH for good measure.
+        echo "$HOME/.risc0/bin" >> "$GITHUB_PATH"
+        echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+        "$HOME/.cargo/bin/r0vm" --version || "$RZUP" show

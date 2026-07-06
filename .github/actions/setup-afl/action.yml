@@ -33,3 +33,7 @@ runs:
     - name: Install cargo-afl
       shell: bash
       run: cargo install cargo-afl --locked
+
+    # The fuzz targets execute guest programs via risc0's ExternalProver, which needs r0vm.
+    - name: Install r0vm
+      uses: ./.github/actions/install-r0vm

@@ -136,6 +136,11 @@ jobs:
           cargo install cargo-fuzz --locked
           cargo install cargo-mutants --locked
 
+      # The corpus oracle runs the fuzz targets, which execute guest programs via
+      # risc0's ExternalProver — that needs the r0vm binary.
+      - name: Install r0vm
+        uses: ./.github/actions/install-r0vm
+
       - name: Make corpus-regression wrapper executable
         run: chmod +x scripts/mutants-corpus-test.sh
 
