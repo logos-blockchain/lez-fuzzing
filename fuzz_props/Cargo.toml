@@ -11,7 +11,14 @@ fuzzer-libfuzzer = []
 fuzzer-afl       = []
 
 [dependencies]
-nssa       = { workspace = true, features = ["prove"] }
+# NOTE: `prove` is deliberately NOT enabled here. Enabling it drags risc0's STARK
+# prover backend (C++/CUDA kernels + heavy circuit codegen) into the fuzz-target
+# build, blowing "cargo fuzz build" from ~6 min to ~50 min — all to compile a prover
+# that `Program::execute` never calls (it executes, it does not prove). Instead the
+# fuzz targets use risc0's `ExternalProver`, which runs the guest via an external
+# `r0vm` binary installed in CI (see .github/actions/install-r0vm). It is still
+# enabled under [dev-dependencies] so `cargo test` runs the guest in-process.
+nssa       = { workspace = true }
 nssa_core  = { workspace = true }
 common     = { workspace = true }
 borsh      = { workspace = true }
@@ -28,3 +35,5 @@ system_accounts = { workspace = true }
 
 [dev-dependencies]
 proptest = "1.4"
+# In-process guest execution for the test suite (no external r0vm needed under `cargo test`).
+nssa = { workspace = true, features = ["prove"] }

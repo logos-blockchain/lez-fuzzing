@@ -1,7 +1,7 @@
 name: Set up libFuzzer toolchain
 description: >
   Install the Rust nightly toolchain (with llvm-tools-preview, required by
-  cargo-fuzz and llvm-cov) and cargo-fuzz itself. The repository and
+  cargo-fuzz and llvm-cov), cargo-fuzz, and the r0vm executor. The repository and
   logos-execution-zone must already be checked out before this runs.
 
 runs:
@@ -15,3 +15,7 @@ runs:
     - name: Install cargo-fuzz
       shell: bash
       run: cargo install cargo-fuzz
+
+    # The fuzz targets execute guest programs via risc0's ExternalProver, which needs r0vm.
+    - name: Install r0vm
+      uses: ./.github/actions/install-r0vm
