@@ -76,23 +76,35 @@ to new unit tests — see the companion doc) were all removed.
 
 ## 📋 Catalogue (Group 1 — structurally unreachable by fuzzing)
 
-The nine mutations reported as MISSED by the `mutants-protocol` run for which
+The mutations reported as MISSED by the `mutants-protocol` run for which
 fuzzing is structurally the wrong tool, with their true coverage. Verified by
 applying each mutation to the `logos-execution-zone` working tree and running the
 cited tests (`RISC0_DEV_MODE=1 cargo test -p lee --lib`). (Group 2 — the migrated
 input-independent-target mutants — is summarised further down.)
 
+> [!NOTE]
+> **Line numbers drift as the LEZ source evolves.** Reconcile by *function name +
+> mutation operator*, not by line number. The `Location` column below was last
+> refreshed against `logos-execution-zone` at `e37876a64` (2026-07-08). If a
+> `mutants-protocol` run reports a documented mutation at a *different* line, it is
+> the same catalogued miss — update the line here rather than treating it as new.
+
 | # | Location | Mutation | Category | Covered by |
 |---|----------|----------|----------|------------|
-| 1 | `lee/state_machine/src/program.rs:21:51` | `*` → `/` (cycle limit `32`) | Valid-tx unit test | transfer-execution tests |
-| 2 | `lee/state_machine/src/program.rs:21:51` | `*` → `+` (cycle limit `33 792`) | Valid-tx unit test | transfer-execution tests |
-| 3 | `lee/state_machine/src/program.rs:21:58` | `*` → `/` (cycle limit `32 768`) | Valid-tx unit test | transfer-execution tests |
-| 4 | `lee/state_machine/src/program.rs:21:58` | `*` → `+` (cycle limit `1 048 608`) | **Near-equivalent — genuine gap** | nothing (see below) |
-| 5 | `lee/state_machine/src/validated_state_diff.rs:155:21` | `\|\|` → `&&` | Valid-tx unit test | transfer-execution tests |
-| 6 | `lee/state_machine/src/validated_state_diff.rs:311:34` | `!=` → `==` | Misbehaving-program unit test | `public_changer_claimer_*` |
-| 7 | `lee/state_machine/src/validated_state_diff.rs:314:20` | `==` → `!=` | Misbehaving-program unit test | `public_changer_claimer_*` + validity-window tests |
-| 8 | `lee/state_machine/src/privacy_preserving_transaction/circuit.rs:88:32` | `>=` → `<` | Valid-PP-tx unit test | PP transition tests |
-| 9 | `lee/state_machine/src/state.rs:335:16` | delete `!` | Valid-PP-tx unit test | PP transition tests |
+| 1 | `lee/state_machine/src/program.rs:15:51` | `*` → `/` (cycle limit `32`) | Valid-tx unit test | transfer-execution tests |
+| 2 | `lee/state_machine/src/program.rs:15:51` | `*` → `+` (cycle limit `33 792`) | Valid-tx unit test | transfer-execution tests |
+| 3 | `lee/state_machine/src/program.rs:15:58` | `*` → `/` (cycle limit `32 768`) | Valid-tx unit test | transfer-execution tests |
+| 4 | `lee/state_machine/src/program.rs:15:58` | `*` → `+` (cycle limit `1 048 608`) | **Near-equivalent — genuine gap** | nothing (see below) |
+| 5 | `lee/state_machine/src/validated_state_diff.rs:160:21` | `\|\|` → `&&` | Valid-tx unit test | transfer-execution tests |
+| 6 | `lee/state_machine/src/validated_state_diff.rs:316:34` | `!=` → `==` | Misbehaving-program unit test | `public_changer_claimer_*` |
+| 7 | `lee/state_machine/src/validated_state_diff.rs:319:20` | `==` → `!=` | Misbehaving-program unit test | `public_changer_claimer_*` + validity-window tests |
+| 8 | `lee/state_machine/src/privacy_preserving_transaction/circuit.rs:90:32` | `>=` → `<` | Valid-PP-tx unit test | PP transition tests |
+| 9 | `lee/state_machine/src/state.rs:302:16` | delete `!` | Valid-PP-tx unit test | PP transition tests |
+| 10 | `lez/common/src/transaction.rs:173:17` | delete `balance` field | Bridge-guard gap (see Category D) | **nothing yet** |
+| 11 | `lez/common/src/transaction.rs:176:27` | `==` → `!=` | Misbehaving-program unit test (see Category D) | **nothing yet** |
+| 12 | `lez/common/src/transaction.rs:176:35` | `&&` → `\|\|` | Misbehaving-program unit test (see Category D) | **nothing yet** |
+| 13 | `lez/common/src/transaction.rs:176:51` | `<=` → `>` | Bridge-guard gap (see Category D) | **nothing yet** |
+| 14 | `lee/state_machine/src/signature/private_key.rs:71:12` | delete `!` in `tweak` | Crypto key-derivation unit test | `signature::private_key::tests::tweak_deterministic` |
 
 ### Category A — Covered by `lee` unit tests, requires a valid *executing* transaction (1–3, 5, 8, 9)
 
@@ -164,6 +176,73 @@ fuzz input can reach this code. The `lee` crate exercises them directly.
   performs a >1M-cycle public execution, a normal execution test for that program
   would catch this mutation incidentally.
 
+### Category D — System-bridge guard (10–13) and key tweak (14)
+
+Added after the original catalogue; both live behind a valid *executing* transaction
+and so are structurally unreachable by the byte-mutating fuzzer for the same reason
+as Categories A/B.
+
+**10–13 — `LeeTransaction::validate_bridge_account_modification`
+(`lez/common/src/transaction.rs:154`).** This guard runs inside `validate_on_state`
+and only does anything when the transaction's `public_diff` already *modifies the
+system bridge account*:
+
+```rust
+let Some(post) = diff.public_diff().get(&bridge_account_id).cloned() else {
+    return Ok(());                       // bridge untouched → nothing to check
+};
+// …
+let only_balance_increased = {
+    let expected_pre = lee::Account { balance: pre.balance, ..post.clone() };
+    (expected_pre == pre) && (pre.balance <= post.balance)   // lines 172–176
+};
+```
+
+Getting the bridge into `public_diff` at all is exactly what a random-bytes fuzzer
+cannot do:
+
+- A plain signed `authenticated_transfer` that *credits* the bridge is rejected by
+  program execution with `ClaimedUnauthorizedAccount` (the bridge is not a signer),
+  so it never lands in the diff. **Verified** by constructing such a transfer and
+  running it through `validate_on_state`.
+- The only transactions that legitimately touch the bridge are sequencer-built
+  deposits (`programs::bridge()` + `bridge_core::Instruction::Deposit`, empty witness
+  set). Those change the bridge account's *data*, not just its balance, and are run
+  through the guard-bypassing `execute_without_system_accounts_check_on_state`
+  path — never through `validate_on_state`.
+
+So no fuzz input can reach this guard, and `common`'s existing
+`validate_on_state`-based tests pass *trivially* (the transfer errors before the
+guard). **These four mutants are currently caught by neither plane** — an genuine
+Plane-A gap on protocol-critical system-account-protection logic, not just a Plane-B
+miss:
+
+| # | Mutation | Killed by a test that asserts… |
+|---|----------|--------------------------------|
+| 10 | delete `balance: pre.balance` override | a pure bridge *balance increase* is **accepted** |
+| 11 | `==` → `!=` in `expected_pre == pre` | a pure bridge *balance increase* is **accepted** |
+| 12 | `&&` → `\|\|` | a bridge modification that also changes *data* is **rejected** |
+| 13 | `<=` → `>` | a pure bridge *balance increase* is **accepted** |
+
+Recommended follow-up (in `logos-execution-zone`, not the fuzzing corpus): a
+`common` unit test that reaches the guard with a genuine bridge-modifying diff. It
+needs the `bridge`/`vault` programs and a bridge-owned account (i.e. the sequencer
+deposit construction), which `common`'s test deps do not currently pull in — hence
+this is filed as a gap rather than resolved here. Mutant 12 also has a
+misbehaving-program flavour (a program that alters the bridge's data while raising
+its balance), mirroring Category B.
+
+**14 — delete `!` in `PrivateKey::tweak`
+(`lee/state_machine/src/signature/private_key.rs:71`).** `tweak` derives the
+"tweaked secret key" used for BIP-340 Schnorr signatures; it is called from
+`key_protocol` key derivation, never from the transaction-validation path a fuzzer
+drives, so raw bytes cannot reach it. Removing the `!` inverts the up-front validity
+check (`if !is_valid_key { return Err }`), causing a *valid* key to be rejected.
+**Covered by Plane A:** `signature::private_key::tests::tweak_deterministic` tweaks
+`[1; 32]` and `.unwrap()`s the result — under the mutation that call returns
+`Err(InvalidPrivateKey)` and the test fails. **Verified:** applying the mutation
+fails `tweak_deterministic` (4 passed / 1 failed) under `cargo test -p lee --lib`.
+
 ---
 
 ## 🔁 Group 2 — migrated input-independent targets
@@ -224,8 +303,10 @@ git checkout -- <mutated-file>       # always revert
 
 A mutation that makes `cargo test` fail is covered by Plane A and belongs in this
 registry; a mutation that the corpus replay (`just mutants-protocol`) catches
-belongs in the corpus instead. Across both groups, mutation #4 (the near-equivalent
-cycle-limit weak mutant) is the only one caught by **neither** plane.
+belongs in the corpus instead. Caught by **neither** plane today: mutation #4 (the
+near-equivalent cycle-limit weak mutant) and mutations #10–#13 (the system-bridge
+guard, Category D) — the latter a genuine Plane-A gap awaiting a `common` unit test
+that reaches the guard with a real bridge-modifying diff.
 
 > [!TIP]
 > when reverting, prefer reverse-editing only the mutated line rather than
