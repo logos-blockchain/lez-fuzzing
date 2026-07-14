@@ -299,9 +299,18 @@ fuzz-afl TARGET="" TIME="30":
             echo "Binary not found — building $t first…"
             just afl-build-target "$t"
         fi
+        # Per-target execution timeout. The model-based lockstep target runs the real
+        # state machine (risc0 executor) once per command, so accept-heavy seeds take
+        # ~0.8 s/exec — over AFL++'s default 1000 ms calibration limit, which aborts the
+        # dry run. Give it an auto-scaled cap (-t 5000+); all other targets keep the
+        # default. Unquoted so an empty value expands to no argument (bash 3.2 safe).
+        local TFLAG=""
+        if [ "$t" = "fuzz_stateful_model_lockstep" ]; then
+            TFLAG="-t 5000+"
+        fi
         # Use afl-fuzz's own -V (run for N seconds then exit) instead of GNU
         # `timeout`, which is not installed by default on macOS.
-        afl-fuzz -V "$TIME" -i "$CORPUS" -o "$OUTPUT" -- "$BINARY" || true
+        afl-fuzz -V "$TIME" $TFLAG -i "$CORPUS" -o "$OUTPUT" -- "$BINARY" || true
     }
     for t in "${TARGETS[@]}"; do
         echo "=== afl++ $t for ${TIME}s ==="
@@ -429,9 +438,17 @@ fuzz-afl-parallel TIME="30" JOBS="4":
             echo "Binary not found — building $t first…"
             just afl-build-target "$t"
         fi
+        # Per-target execution timeout — see the note in `fuzz-afl`. The lockstep target
+        # runs the risc0 executor per command (~0.8 s/exec on accept-heavy seeds), which
+        # exceeds AFL++'s default 1000 ms calibration limit; give it -t 5000+. Unquoted so
+        # an empty value expands to no argument (bash 3.2 safe).
+        local TFLAG=""
+        if [ "$t" = "fuzz_stateful_model_lockstep" ]; then
+            TFLAG="-t 5000+"
+        fi
         # Use afl-fuzz's own -V (run for N seconds then exit) instead of GNU
         # `timeout`, which is not installed by default on macOS.
-        afl-fuzz -V {{TIME}} -i "$CORPUS" -o "$OUTPUT" -- "$BINARY" || true
+        afl-fuzz -V {{TIME}} $TFLAG -i "$CORPUS" -o "$OUTPUT" -- "$BINARY" || true
     }
     echo "Targets: ${#TARGETS[@]}  |  max parallel: {{JOBS}}  |  time per target: {{TIME}}s"
     for t in "${TARGETS[@]}"; do

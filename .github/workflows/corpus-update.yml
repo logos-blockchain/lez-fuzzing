@@ -162,9 +162,16 @@ jobs:
         run: |
           T="${{ matrix.target }}"
           mkdir -p "afl-output/$T"
+          # The lockstep target's execs (~0.8 s on accept-heavy seeds) exceed AFL++'s
+          # default 1000 ms calibration limit and abort the dry run; give only it an
+          # auto-scaled cap (-t 5000+).
+          TFLAG=""
+          if [ "$T" = "fuzz_stateful_model_lockstep" ]; then
+            TFLAG="-t 5000+"
+          fi
           set +e
           timeout ${{ needs.config.outputs.duration }} \
-            afl-fuzz -i "afl-seeds/$T" -o "afl-output/$T" -- "fuzz/target/release/$T"
+            afl-fuzz $TFLAG -i "afl-seeds/$T" -o "afl-output/$T" -- "fuzz/target/release/$T"
           rc=$?
           set -e
           # 124 = SIGALRM from timeout (expected end); 0 = clean exit; else real failure
@@ -203,8 +210,15 @@ jobs:
             exit 0
           fi
           before=$(ls "$SRC" | wc -l)
+          # The lockstep target's accept-heavy seeds run ~0.8 s/exec; with the default
+          # 1000 ms limit afl-cmin would drop them as timeouts and corrupt the minimised
+          # corpus. cmin's arg parser rejects the '+' suffix, so use a plain 5 s cap.
+          TFLAG=""
+          if [ "$T" = "fuzz_stateful_model_lockstep" ]; then
+            TFLAG="-t 5000"
+          fi
           # afl-cmin can fail on pathological corpora; fall back to leaving SRC as-is.
-          if afl-cmin -i "$SRC" -o "afl-cmin/$T" -- "fuzz/target/release/$T"; then
+          if afl-cmin $TFLAG -i "$SRC" -o "afl-cmin/$T" -- "fuzz/target/release/$T"; then
             rm -rf "$SRC"
             mkdir -p "$SRC"
             cp "afl-cmin/$T"/* "$SRC"/ 2>/dev/null || true

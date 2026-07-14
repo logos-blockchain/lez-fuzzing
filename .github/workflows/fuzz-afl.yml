@@ -5,7 +5,7 @@ on:
     - cron: "0 2 * * *"
   workflow_dispatch:
   push:
-    branches: [main, chore-corpus-update]
+    branches: [main, fix-add-timeout-stateful-lockstep]
 
 env:
   RISC0_DEV_MODE: "1"
@@ -90,11 +90,20 @@ jobs:
         run: |
           TARGET="${{ matrix.target }}"
           mkdir -p afl-output/${TARGET}
+          # The model-based lockstep target runs the real state machine (risc0 executor)
+          # once per command, so accept-heavy seeds take ~0.8 s/exec — over AFL++'s default
+          # 1000 ms calibration limit, which aborts the dry run. Give only that target an
+          # auto-scaled cap (-t 5000+); all others keep the default timeout.
+          TFLAG=""
+          if [ "$TARGET" = "fuzz_stateful_model_lockstep" ]; then
+            TFLAG="-t 5000+"
+          fi
           # Disable errexit so that timeout's exit code 124 (expected signal) does not
           # cause bash -e to abort the script before the guard below can run.
           set +e
           timeout 60 \
             afl-fuzz \
+              $TFLAG \
               -i afl-seeds/${TARGET} \
               -o afl-output/${TARGET} \
               -- fuzz/target/release/${TARGET}
@@ -124,8 +133,15 @@ jobs:
           BINARY="fuzz/target/release/${TARGET}"
           showmap_filled="n/a"
           showmap_pct="n/a"
+          # The lockstep target's accept-heavy seeds run ~0.8 s/exec; without a raised
+          # timeout afl-showmap would skip them, undercounting edge coverage. afl-showmap
+          # takes a fixed cap only (no '+' auto-scale), so use a plain 5 s cap for it.
+          SHOWMAP_TFLAG=""
+          if [ "$TARGET" = "fuzz_stateful_model_lockstep" ]; then
+            SHOWMAP_TFLAG="-t 5000"
+          fi
           if [ -d "$CORPUS" ] && [ -f "$BINARY" ]; then
-            afl-showmap -C \
+            afl-showmap -C $SHOWMAP_TFLAG \
               -i "$CORPUS" \
               -o "afl-edges-${TARGET}.txt" \
               -- "$BINARY" 2>/dev/null || true
