@@ -199,6 +199,22 @@ fn arb_private_action(
     })
 }
 
+/// Append `action` to `actions` unless its nullifier **or** its commitment already appears
+/// there — either duplicate *alone* trips validator check 2 (nullifiers and commitments must
+/// each be unique across a message's private actions), so a partial collision must be
+/// dropped just like a full one.
+pub(crate) fn push_private_action_if_unique(
+    actions: &mut Vec<PrivateAction>,
+    action: PrivateAction,
+) {
+    if !actions
+        .iter()
+        .any(|a| a.nullifier == action.nullifier || a.commitment == action.commitment)
+    {
+        actions.push(action);
+    }
+}
+
 /// Generate a privacy-preserving transaction aimed at the **state-transition executor**.
 ///
 /// The transaction is built to *frequently* pass every validation check up to and including
@@ -288,12 +304,7 @@ pub fn arb_privacy_preserving_tx(
     let mut private_actions: Vec<PrivateAction> = Vec::new();
     for _ in 0..n_priv {
         let action = arb_private_action(u, live_root)?;
-        if !private_actions
-            .iter()
-            .any(|a| a.nullifier == action.nullifier || a.commitment == action.commitment)
-        {
-            private_actions.push(action);
-        }
+        push_private_action_if_unique(&mut private_actions, action);
     }
 
     // Validator check 1: the private-action list must be non-empty.

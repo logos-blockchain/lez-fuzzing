@@ -3,7 +3,7 @@ use arbitrary::Unstructured;
 use crate::generators::{FuzzAccount, account_id_for_key};
 use crate::privacy::{
     arb_account, arb_conflicting_nullifier_pair, arb_privacy_preserving_tx, arb_validity_window,
-    synthesize_passing_proof,
+    push_private_action_if_unique, synthesize_passing_proof,
 };
 use nssa::privacy_preserving_transaction::{Message as PPMessage, WitnessSet as PPWitnessSet};
 use nssa::{AccountId, PrivacyPreservingTransaction, PrivateKey, V03State};
@@ -468,6 +468,51 @@ fn arb_privacy_preserving_tx_generator_invariants() {
         garbage * 16 >= oks,
         "garbage-proof rate {garbage}/{oks} is below 1/16 (expected ~1/8)"
     );
+}
+
+/// The private-action dedup guard must reject a *partial* collision — a candidate sharing
+/// only the nullifier, or only the commitment, with an already-kept action — because
+/// validator check 2 requires nullifiers and commitments to *each* be unique across the
+/// message. Random fuzz draws never produce partial collisions (both fields derive from
+/// independent 32-byte draws), so this pins the guard's `||` directly: mutated to `&&`,
+/// both partial-collision cases below would be accepted and the assertions fail.
+#[test]
+fn push_private_action_if_unique_rejects_partial_collisions() {
+    let state = crate::genesis::genesis_state(&[], vec![]);
+    let kept = valid_private_action(&state, 1);
+    let fresh = valid_private_action(&state, 2);
+
+    let mut actions = Vec::new();
+    push_private_action_if_unique(&mut actions, kept.clone());
+    assert_eq!(actions.len(), 1, "first action must always be accepted");
+
+    // Same nullifier, different commitment → rejected (duplicate-nullifier check 2).
+    let mut nullifier_clash = fresh.clone();
+    nullifier_clash.nullifier = kept.nullifier;
+    push_private_action_if_unique(&mut actions, nullifier_clash);
+    assert_eq!(
+        actions.len(),
+        1,
+        "an action sharing only the nullifier must be rejected"
+    );
+
+    // Different nullifier, same commitment → rejected (duplicate-commitment check 2).
+    let mut commitment_clash = fresh.clone();
+    commitment_clash.commitment = kept.commitment;
+    push_private_action_if_unique(&mut actions, commitment_clash);
+    assert_eq!(
+        actions.len(),
+        1,
+        "an action sharing only the commitment must be rejected"
+    );
+
+    // Fully distinct → accepted.
+    push_private_action_if_unique(&mut actions, fresh.clone());
+    assert_eq!(actions.len(), 2, "a fully distinct action must be kept");
+
+    // Exact duplicate → rejected.
+    push_private_action_if_unique(&mut actions, fresh);
+    assert_eq!(actions.len(), 2, "an exact duplicate must be rejected");
 }
 
 // ── arb_conflicting_nullifier_pair ──────────────────────────────────────────────────────
