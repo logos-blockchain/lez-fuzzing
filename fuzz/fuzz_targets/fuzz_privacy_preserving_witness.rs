@@ -27,24 +27,28 @@ use nssa::{
         Message as PPMessage,
         WitnessSet as PPWitnessSet,
         circuit::Proof,
+        message::PublicActionWithID,
     },
     PrivacyPreservingTransaction,
 };
 use nssa_core::{
-    account::Nonce,
+    account::{Account, Nonce},
     program::{BlockValidityWindow, TimestampValidityWindow},
 };
 
-/// Build a minimal `Message` for testing — no commitments, no nullifiers,
-/// no encrypted states.  Sufficient to test signature binding.
+/// Build a minimal `Message` for testing — no private actions, default public
+/// post-states.  Sufficient to test signature binding.
 fn minimal_message(account_ids: Vec<AccountId>, nonces: Vec<Nonce>) -> PPMessage {
     PPMessage {
-        public_account_ids: account_ids,
+        public_actions: account_ids
+            .into_iter()
+            .map(|account_id| PublicActionWithID {
+                account_id,
+                post_state: Account::default(),
+            })
+            .collect(),
         nonces,
-        public_post_states: vec![],
-        encrypted_private_post_states: vec![],
-        new_commitments: vec![],
-        new_nullifiers: vec![],
+        private_actions: vec![],
         block_validity_window: BlockValidityWindow::new_unbounded(),
         timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
     }

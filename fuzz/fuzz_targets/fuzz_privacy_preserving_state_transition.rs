@@ -69,9 +69,9 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
             .iter()
             .map(|(_, pk)| AccountId::from(pk))
             .collect();
-        let public_account_ids = tx.message().public_account_ids.clone();
-        let public_post_states = tx.message().public_post_states.clone();
-        let new_commitments = tx.message().new_commitments.clone();
+        let public_account_ids = tx.message().public_account_ids();
+        let public_actions = tx.message().public_actions.clone();
+        let new_commitments = tx.message().commitments();
 
         let lee_tx = LeeTransaction::PrivacyPreserving(tx);
 
@@ -155,17 +155,14 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
                 .collect();
             assert_nonce_increment_correctness(&isolated_signers, &nonces_before, &state);
 
-            // Non-signer public accounts at applied indices are set to their post-state.
-            for (idx, id) in public_account_ids.iter().enumerate() {
-                if idx >= public_post_states.len() {
-                    break; // public_diff zips ids with post_states, truncating to the shorter vec
-                }
-                if signer_ids.contains(id) {
+            // Non-signer public accounts are set to their declared post-state.
+            for action in &public_actions {
+                if signer_ids.contains(&action.account_id) {
                     continue; // signer accounts also get a nonce increment afterwards
                 }
                 assert_eq!(
-                    state.get_account_by_id(*id),
-                    public_post_states[idx],
+                    state.get_account_by_id(action.account_id),
+                    action.post_state,
                     "INVARIANT VIOLATION [PostStateApplied]: public account was not set to its \
                      declared post-state",
                 );
