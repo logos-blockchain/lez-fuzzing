@@ -2,7 +2,7 @@
 //! Fuzz target: privacy-preserving encoding invariants.
 //!
 //! Tests that `to_bytes` / `from_bytes` round-trips work correctly for the
-//! privacy-preserving `Message` type, and that `try_from_circuit_output`
+//! privacy-preserving `Message` type, and that `from_circuit_output`
 //! maps each circuit-output field onto the resulting `Message` unchanged.
 //!
 //! `PrivacyPreservingTransaction` is also tested for serialisation stability
@@ -15,11 +15,12 @@ use nssa::{
         Message as PPMessage,
         WitnessSet as PPWitnessSet,
         circuit::Proof,
+        message::PublicActionWithID,
     },
 };
 use nssa_core::{
-    Commitment, PrivacyPreservingCircuitOutput,
-    account::{Account, Nonce},
+    PrivacyPreservingCircuitOutput, PublicAction,
+    account::{Account, AccountWithMetadata, Nonce},
     program::{BlockValidityWindow, TimestampValidityWindow},
 };
 
@@ -31,12 +32,12 @@ fn minimal_message() -> PPMessage {
         ),
     );
     PPMessage {
-        public_account_ids: vec![addr],
+        public_actions: vec![PublicActionWithID {
+            account_id: addr,
+            post_state: Account::default(),
+        }],
         nonces: vec![Nonce::from(0_u128)],
-        public_post_states: vec![],
-        encrypted_private_post_states: vec![],
-        new_commitments: vec![],
-        new_nullifiers: vec![],
+        private_actions: vec![],
         block_validity_window: BlockValidityWindow::new_unbounded(),
         timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
     }
@@ -108,55 +109,60 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
     }
 
     // ── INVARIANT [CircuitOutputMapping] ──────────────────────────────────────
-    // `try_from_circuit_output` carries each circuit-output field onto the resulting
-    // `Message` unchanged, and threads through the caller-supplied public_account_ids /
-    // nonces.  The function is infallible (it performs no validation of its own), so a
-    // bare `is_ok()` would be a tautology; instead assert the field mapping, which catches
-    // a mutation that drops, swaps, or defaults any carried field.
+    // `from_circuit_output` carries each circuit-output field onto the resulting
+    // `Message` unchanged — every public action's pre-state account id is paired with its
+    // post-state, private actions are carried verbatim — and threads through the
+    // caller-supplied nonces.  The function performs no validation of its own, so assert
+    // the field mapping, which catches a mutation that drops, swaps, or defaults any
+    // carried field.
     {
         let addr = AccountId::from(
             &PublicKey::new_from_private_key(
                 &PrivateKey::try_new([1_u8; 32]).expect("known-good"),
             ),
         );
-        let account_ids = vec![addr];
         let nonces = vec![Nonce::from(7_u128)];
-        let post_states = vec![Account::default()];
-        let commitments =
-            vec![Commitment::new(&AccountId::new([9_u8; 32]), &Account::default())];
+        let pre_state = Account::default();
+        let post_state = Account {
+            balance: 42,
+            ..Account::default()
+        };
 
         let output = PrivacyPreservingCircuitOutput {
-            public_pre_states: vec![],
-            public_post_states: post_states.clone(),
-            new_commitments: commitments.clone(),
-            new_nullifiers: vec![],
-            encrypted_private_post_states: vec![],
+            public_actions: vec![PublicAction {
+                pre: AccountWithMetadata::new(pre_state, true, addr),
+                post: post_state.clone(),
+            }],
+            private_actions: vec![],
             block_validity_window: BlockValidityWindow::new_unbounded(),
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
         };
 
-        let msg = PPMessage::try_from_circuit_output(account_ids.clone(), nonces.clone(), output)
-            .expect("INVARIANT VIOLATION [CircuitOutputMapping]: \
-                     try_from_circuit_output is infallible and must accept any output");
+        let msg = PPMessage::from_circuit_output(nonces.clone(), output);
 
         assert_eq!(
-            msg.public_account_ids, account_ids,
+            msg.public_account_ids(),
+            vec![addr],
             "INVARIANT VIOLATION [CircuitOutputMapping]: \
-             public_account_ids not threaded through unchanged",
+             public action account ids not carried from the circuit output's pre-states",
         );
         assert_eq!(
             msg.nonces, nonces,
             "INVARIANT VIOLATION [CircuitOutputMapping]: nonces not threaded through unchanged",
         );
         assert_eq!(
-            msg.public_post_states, post_states,
+            msg.public_actions,
+            vec![PublicActionWithID {
+                account_id: addr,
+                post_state,
+            }],
             "INVARIANT VIOLATION [CircuitOutputMapping]: \
-             public_post_states not carried from the circuit output",
+             public post-states not carried from the circuit output",
         );
-        assert_eq!(
-            msg.new_commitments, commitments,
+        assert!(
+            msg.private_actions.is_empty(),
             "INVARIANT VIOLATION [CircuitOutputMapping]: \
-             new_commitments not carried from the circuit output",
+             private actions must be carried verbatim (here: empty)",
         );
     }
 
@@ -181,24 +187,24 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
     // ── Varied-size message round-trips ──────────────────────────────────────
     // Verify round-trip for several multi-account messages.
     for n_accounts in [0, 1, 2, 3] {
-        let mut account_ids = Vec::new();
+        let mut public_actions = Vec::new();
         let mut nonces = Vec::new();
         for i in 0..n_accounts {
             let key_bytes = [i + 1_u8; 32];
             if let Ok(key) = PrivateKey::try_new(key_bytes) {
                 let pk = PublicKey::new_from_private_key(&key);
-                account_ids.push(AccountId::from(&pk));
+                public_actions.push(PublicActionWithID {
+                    account_id: AccountId::from(&pk),
+                    post_state: Account::default(),
+                });
                 nonces.push(Nonce::from(i as u128));
             }
         }
 
         let msg = PPMessage {
-            public_account_ids: account_ids,
+            public_actions,
             nonces,
-            public_post_states: vec![],
-            encrypted_private_post_states: vec![],
-            new_commitments: vec![],
-            new_nullifiers: vec![],
+            private_actions: vec![],
             block_validity_window: BlockValidityWindow::new_unbounded(),
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
         };

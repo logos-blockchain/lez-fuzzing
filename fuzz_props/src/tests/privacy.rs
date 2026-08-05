@@ -3,13 +3,31 @@ use arbitrary::Unstructured;
 use crate::generators::{FuzzAccount, account_id_for_key};
 use crate::privacy::{
     arb_account, arb_conflicting_nullifier_pair, arb_privacy_preserving_tx, arb_validity_window,
-    synthesize_passing_proof,
+    push_private_action_if_unique, synthesize_passing_proof,
 };
 use nssa::privacy_preserving_transaction::{Message as PPMessage, WitnessSet as PPWitnessSet};
-use nssa::{AccountId, PrivacyPreservingTransaction, PrivateKey};
-use nssa_core::Commitment;
+use nssa::{AccountId, PrivacyPreservingTransaction, PrivateKey, V03State};
 use nssa_core::account::Account;
+use nssa_core::encryption::Ciphertext;
 use nssa_core::program::{BlockValidityWindow, TimestampValidityWindow};
+use nssa_core::{Commitment, EncryptedAccountData, EphemeralPublicKey, Nullifier, PrivateAction};
+
+/// A structurally-valid [`PrivateAction`] whose nullifier digest is the live commitment-set
+/// root of `state` (a member of `root_history` from genesis onwards, since the protocol seeds
+/// the history with its dummy commitment) — so checks 5 and 6 both pass on a fresh state.
+fn valid_private_action(state: &V03State, seed: u8) -> PrivateAction {
+    let aid = AccountId::new([seed; 32]);
+    PrivateAction {
+        nullifier: Nullifier::for_account_initialization(&aid),
+        root: state.commitment_set_digest(),
+        commitment: Commitment::new(&aid, &Account::default()),
+        encrypted_post_state: EncryptedAccountData {
+            ciphertext: Ciphertext::from_inner(vec![]),
+            epk: EphemeralPublicKey(vec![]),
+            view_tag: 0,
+        },
+    }
+}
 
 /// `synthesize_passing_proof` must drive the executor *past* proof verification (check 4)
 /// into checks 5–6 and `apply_state_diff`. If the reconstructed journal were even one
@@ -28,17 +46,15 @@ fn synthesized_proof_reaches_checks_5_6_and_applies() {
 
     let mut state = crate::genesis::genesis_state(&[], vec![]);
 
-    // No signers and a single fresh commitment: checks 1–3 are vacuous/trivially met, so
-    // the only way to reach checks 5–6 is for the synthesised proof to pass check 4.
-    let aid = AccountId::new([7_u8; 32]);
-    let commitment = Commitment::new(&aid, &Account::default());
+    // No signers and a single valid private action (fresh commitment, nullifier bound to the
+    // live root): checks 1–3 are vacuous/trivially met and checks 5–6 pass, so the only way
+    // to reach the successful apply is for the synthesised proof to pass check 4.
+    let action = valid_private_action(&state, 7);
+    let commitment = action.commitment;
     let message = PPMessage {
-        public_account_ids: vec![],
+        public_actions: vec![],
         nonces: vec![],
-        public_post_states: vec![],
-        encrypted_private_post_states: vec![],
-        new_commitments: vec![commitment.clone()],
-        new_nullifiers: vec![],
+        private_actions: vec![action],
         block_validity_window: BlockValidityWindow::new_unbounded(),
         timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
     };
@@ -87,17 +103,15 @@ fn synthesized_proof_is_rejected_without_dev_mode() {
 
     let mut state = crate::genesis::genesis_state(&[], vec![]);
 
-    // Same well-formed message as the positive test: checks 1–3 are vacuous/trivially met, so a
-    // rejection can only come from check 4 (proof verification) failing on the fake receipt.
-    let aid = AccountId::new([7_u8; 32]);
-    let commitment = Commitment::new(&aid, &Account::default());
+    // Same well-formed message as the positive test: checks 1–3 are vacuous/trivially met and
+    // checks 5–6 would pass, so a rejection can only come from check 4 (proof verification)
+    // failing on the fake receipt.
+    let action = valid_private_action(&state, 7);
+    let commitment = action.commitment;
     let message = PPMessage {
-        public_account_ids: vec![],
+        public_actions: vec![],
         nonces: vec![],
-        public_post_states: vec![],
-        encrypted_private_post_states: vec![],
-        new_commitments: vec![commitment.clone()],
-        new_nullifiers: vec![],
+        private_actions: vec![action],
         block_validity_window: BlockValidityWindow::new_unbounded(),
         timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
     };
@@ -258,7 +272,7 @@ fn arb_validity_window_bounds_use_modulo_8() {
 /// Two flavours of check run here: per-iteration upper bounds that must hold for
 /// *every* generated transaction, and end-of-run reachability checks that confirm
 /// the interesting shapes actually occur across the sampled inputs.
-/// Which branches of the line-233 `if !accounts.is_empty() && bool::arbitrary(u)?` were
+/// Which branches of the extra-id `if !accounts.is_empty() && bool::arbitrary(u)?` were
 /// observable across a transaction's non-signer "extra" public-account ids.
 #[derive(Default)]
 struct ExtraKinds {
@@ -271,8 +285,8 @@ struct ExtraKinds {
 }
 
 /// Classify a message's extras. A signer's public-account id is key-derived and independent
-/// of `FuzzAccount.account_id`, so any non-signer id present in `public_account_ids` was
-/// appended by the line-233 `if`; a *known* id can only come from its `&&`-true branch.
+/// of `FuzzAccount.account_id`, so any non-signer id present in the public-action list was
+/// appended by the extra-id `if`; a *known* id can only come from its `&&`-true branch.
 fn classify_extras(
     public_account_ids: &[AccountId],
     signer_ids: &[AccountId],
@@ -318,10 +332,7 @@ fn arb_privacy_preserving_tx_generator_invariants() {
     let mut saw_extra = false;
     let mut saw_known_extra = false;
     let mut saw_random_extra = false;
-    let mut max_commitments = 0_usize;
-    let mut max_nullifiers = 0_usize;
-    let mut saw_empty_comm_nonempty_null = false;
-    let mut saw_oversize_post_states = false;
+    let mut max_private_actions = 0_usize;
     let mut garbage = 0_usize;
     let mut saw_garbage = false;
 
@@ -350,57 +361,52 @@ fn arb_privacy_preserving_tx_generator_invariants() {
         // The signer count is drawn modulo `max_signers + 1`, so it can never exceed
         // the cap of 3 distinct signers.
         assert!(n_signers <= 3, "n_signers {n_signers} exceeds the cap of 3");
-        // Post-states are drawn modulo `public_account_ids.len() + 4` (0..=len+3).
-        assert!(
-            msg.public_post_states.len() <= msg.public_account_ids.len() + 3,
-            "public_post_states {} exceeds public_account_ids + 3 ({})",
-            msg.public_post_states.len(),
-            msg.public_account_ids.len() + 3
-        );
-        if msg.public_post_states.len() > msg.public_account_ids.len() {
-            saw_oversize_post_states = true;
-        }
         // At most 3 signers plus at most 3 extra ids (both deduplicated).
         assert!(
-            msg.public_account_ids.len() <= 6,
-            "public_account_ids {} exceeds signers (<=3) + extras (<=3)",
-            msg.public_account_ids.len()
+            msg.public_actions.len() <= 6,
+            "public_actions {} exceeds signers (<=3) + extras (<=3)",
+            msg.public_actions.len()
         );
-        // `new_commitments` count is drawn modulo 4 (0..=3).
-        assert!(
-            msg.new_commitments.len() <= 3,
-            "new_commitments {} exceeds 3",
-            msg.new_commitments.len()
+        // The account ids across public actions must be unique (validator check 2).
+        let public_account_ids = msg.public_account_ids();
+        let unique_ids: std::collections::HashSet<&AccountId> = public_account_ids.iter().collect();
+        assert_eq!(
+            unique_ids.len(),
+            public_account_ids.len(),
+            "public action account ids must be deduplicated"
         );
-        // `new_nullifiers` count is drawn modulo 3 (0..=2).
+        // `private_actions` count is drawn modulo 4 (0..=3), with a non-empty fallback.
         assert!(
-            msg.new_nullifiers.len() <= 2,
-            "new_nullifiers {} exceeds 2",
-            msg.new_nullifiers.len()
+            (1..=3).contains(&msg.private_actions.len()),
+            "private_actions {} outside the expected 1..=3 range",
+            msg.private_actions.len()
         );
-        // `encrypted_private_post_states` count is drawn modulo 3 (0..=2).
-        assert!(
-            msg.encrypted_private_post_states.len() <= 2,
-            "encrypted_private_post_states {} exceeds 2",
-            msg.encrypted_private_post_states.len()
+        // Nullifiers and commitments across private actions must be unique (validator
+        // check 2).
+        let nullifiers = msg.nullifiers();
+        let unique_nullifiers: std::collections::HashSet<_> =
+            nullifiers.iter().map(|(n, _)| *n).collect();
+        assert_eq!(
+            unique_nullifiers.len(),
+            nullifiers.len(),
+            "private-action nullifiers must be deduplicated"
+        );
+        let commitments = msg.commitments();
+        let unique_commitments: std::collections::HashSet<_> = commitments.iter().collect();
+        assert_eq!(
+            unique_commitments.len(),
+            commitments.len(),
+            "private-action commitments must be deduplicated"
         );
 
-        // Classify the non-signer "extras" by which branch of the line-233 `if` produced
+        // Classify the non-signer "extras" by which branch of the extra-id `if` produced
         // them — a *known* fuzz-account id, a *random* id, or both.
-        let extras = classify_extras(&msg.public_account_ids, &signer_ids, &known_ids);
+        let extras = classify_extras(&public_account_ids, &signer_ids, &known_ids);
         saw_extra |= extras.any;
         saw_known_extra |= extras.known;
         saw_random_extra |= extras.random;
 
-        max_commitments = max_commitments.max(msg.new_commitments.len());
-        max_nullifiers = max_nullifiers.max(msg.new_nullifiers.len());
-
-        // The fallback that guarantees "commitments or nullifiers non-empty" must fire
-        // only when *both* are empty. So a message with empty commitments but non-empty
-        // nullifiers is a valid, reachable shape — the fallback must leave it alone.
-        if msg.new_commitments.is_empty() && !msg.new_nullifiers.is_empty() {
-            saw_empty_comm_nonempty_null = true;
-        }
+        max_private_actions = max_private_actions.max(msg.private_actions.len());
 
         // Which proof branch ran? A synthesized passing proof is a deterministic
         // function of (message, state, signers); re-synthesizing reproduces it
@@ -445,26 +451,10 @@ fn arb_privacy_preserving_tx_generator_invariants() {
         saw_random_extra,
         "the generator never appended a *random* id as an extra"
     );
-    // Multiple distinct commitments must be reachable (the dedup must keep, not drop).
+    // Multiple distinct private actions must be reachable (the dedup must keep, not drop).
     assert!(
-        max_commitments >= 2,
-        "the generator never produced >= 2 commitments"
-    );
-    // Multiple distinct nullifiers must be reachable (the dedup must keep, not drop).
-    assert!(
-        max_nullifiers >= 2,
-        "the generator never produced >= 2 nullifiers"
-    );
-    // The empty-commitments + non-empty-nullifiers shape must be reachable, proving the
-    // fallback does not over-fire.
-    assert!(
-        saw_empty_comm_nonempty_null,
-        "the generator never produced empty commitments with non-empty nullifiers"
-    );
-    // The oversized shape (more post-states than public account ids) must be reachable.
-    assert!(
-        saw_oversize_post_states,
-        "the generator never produced more post-states than public account ids"
+        max_private_actions >= 2,
+        "the generator never produced >= 2 private actions"
     );
     // The garbage-proof branch (~1 in 8) must be reachable at all.
     assert!(saw_garbage, "the generator never produced a garbage proof");
@@ -478,6 +468,51 @@ fn arb_privacy_preserving_tx_generator_invariants() {
         garbage * 16 >= oks,
         "garbage-proof rate {garbage}/{oks} is below 1/16 (expected ~1/8)"
     );
+}
+
+/// The private-action dedup guard must reject a *partial* collision — a candidate sharing
+/// only the nullifier, or only the commitment, with an already-kept action — because
+/// validator check 2 requires nullifiers and commitments to *each* be unique across the
+/// message. Random fuzz draws never produce partial collisions (both fields derive from
+/// independent 32-byte draws), so this pins the guard's `||` directly: mutated to `&&`,
+/// both partial-collision cases below would be accepted and the assertions fail.
+#[test]
+fn push_private_action_if_unique_rejects_partial_collisions() {
+    let state = crate::genesis::genesis_state(&[], vec![]);
+    let kept = valid_private_action(&state, 1);
+    let fresh = valid_private_action(&state, 2);
+
+    let mut actions = Vec::new();
+    push_private_action_if_unique(&mut actions, kept.clone());
+    assert_eq!(actions.len(), 1, "first action must always be accepted");
+
+    // Same nullifier, different commitment → rejected (duplicate-nullifier check 2).
+    let mut nullifier_clash = fresh.clone();
+    nullifier_clash.nullifier = kept.nullifier;
+    push_private_action_if_unique(&mut actions, nullifier_clash);
+    assert_eq!(
+        actions.len(),
+        1,
+        "an action sharing only the nullifier must be rejected"
+    );
+
+    // Different nullifier, same commitment → rejected (duplicate-commitment check 2).
+    let mut commitment_clash = fresh.clone();
+    commitment_clash.commitment = kept.commitment;
+    push_private_action_if_unique(&mut actions, commitment_clash);
+    assert_eq!(
+        actions.len(),
+        1,
+        "an action sharing only the commitment must be rejected"
+    );
+
+    // Fully distinct → accepted.
+    push_private_action_if_unique(&mut actions, fresh.clone());
+    assert_eq!(actions.len(), 2, "a fully distinct action must be kept");
+
+    // Exact duplicate → rejected.
+    push_private_action_if_unique(&mut actions, fresh);
+    assert_eq!(actions.len(), 2, "an exact duplicate must be rejected");
 }
 
 // ── arb_conflicting_nullifier_pair ──────────────────────────────────────────────────────

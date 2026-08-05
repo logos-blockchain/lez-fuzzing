@@ -21,18 +21,18 @@
 //! `../privacy_preserving_coverage_gap.md`).
 //!
 //! [`synthesize_passing_proof`] takes the per-message route: it reconstructs the exact
-//! [`PrivacyPreservingCircuitOutput`] the validator will build — including
-//! `public_pre_states`, which the validator reads from live chain state — then builds a
-//! [`FakeReceipt`] whose `ReceiptClaim::ok` matches that journal. Check 4 then passes for
+//! [`PrivacyPreservingCircuitOutput`] the validator will build — including the `pre` half
+//! of each [`PublicAction`], which the validator reads from live chain state — then builds
+//! a [`FakeReceipt`] whose `ReceiptClaim::ok` matches that journal. Check 4 then passes for
 //! that specific (message, state) pair, and execution proceeds into checks 5–6 and state
 //! application.
 //!
 //! # Soundness note for callers
 //!
 //! Because the proof is *forced* to pass, this harness deliberately does **not** assert
-//! balance conservation: under a real proof the circuit is what guarantees the
-//! `public_post_states` conserve value, and that guarantee is exactly what a synthesised
-//! pass bypasses. Asserting conservation here would only re-test the fake. The sound
+//! balance conservation: under a real proof the circuit is what guarantees the public
+//! post-states conserve value, and that guarantee is exactly what a synthesised pass
+//! bypasses. Asserting conservation here would only re-test the fake. The sound
 //! invariants for this path — no panic, state isolation on rejection, commitment insertion,
 //! signer-nonce increment, post-state application, and replay rejection — are checked by the
 //! `fuzz_privacy_preserving_state_transition` target.
@@ -43,11 +43,13 @@ use nssa::{
     AccountId, PRIVACY_PRESERVING_CIRCUIT_ID, PrivacyPreservingTransaction, PrivateKey, V03State,
     privacy_preserving_transaction::{
         Message as PPMessage, WitnessSet as PPWitnessSet, circuit::Proof,
+        message::PublicActionWithID,
     },
 };
 use nssa_core::{
     Commitment, CommitmentSetDigest, EncryptedAccountData, EncryptionScheme, EphemeralPublicKey,
-    Nullifier, PrivacyPreservingCircuitOutput, PrivateAccountKind, SharedSecretKey,
+    Nullifier, PrivacyPreservingCircuitOutput, PrivateAccountKind, PrivateAction, PublicAction,
+    SharedSecretKey,
     account::{Account, AccountWithMetadata, Nonce},
     program::ValidityWindow,
 };
@@ -60,8 +62,9 @@ use crate::generators::{FuzzAccount, account_id_for_key};
 ///
 /// `signer_account_ids` must be the ids the validator will derive from the witness set —
 /// i.e. `AccountId::from(public_key)` for every key the message is signed with. They drive
-/// the `is_authorized` flag of each reconstructed `public_pre_state`, so they must match the
-/// witness set exactly or the journal digest diverges and the proof is rejected at check 4.
+/// the `is_authorized` flag of each reconstructed `PublicAction::pre`, so they must match
+/// the witness set exactly or the journal digest diverges and the proof is rejected at
+/// check 4.
 ///
 /// The returned proof is valid **only** for this exact `(message, state, signers)` triple;
 /// it must be regenerated whenever any of them changes (notably after a prior transaction
@@ -72,27 +75,26 @@ pub fn synthesize_passing_proof(
     state: &V03State,
     signer_account_ids: &[AccountId],
 ) -> Proof {
-    // Reconstruct `public_pre_states` byte-for-byte as
+    // Reconstruct each `PublicAction` byte-for-byte as
     // `ValidatedStateDiff::from_privacy_preserving_transaction` does: read each public
-    // account from live chain state, marking it authorised iff it signed.
-    let public_pre_states: Vec<AccountWithMetadata> = message
-        .public_account_ids
+    // account's pre-state from live chain state (marking it authorised iff it signed) and
+    // pair it with the message's declared post-state.
+    let public_actions: Vec<PublicAction> = message
+        .public_actions
         .iter()
-        .map(|account_id| {
-            AccountWithMetadata::new(
-                state.get_account_by_id(*account_id),
-                signer_account_ids.contains(account_id),
-                *account_id,
-            )
+        .map(|action| PublicAction {
+            pre: AccountWithMetadata::new(
+                state.get_account_by_id(action.account_id),
+                signer_account_ids.contains(&action.account_id),
+                action.account_id,
+            ),
+            post: action.post_state.clone(),
         })
         .collect();
 
     let output = PrivacyPreservingCircuitOutput {
-        public_pre_states,
-        public_post_states: message.public_post_states.clone(),
-        encrypted_private_post_states: message.encrypted_private_post_states.clone(),
-        new_commitments: message.new_commitments.clone(),
-        new_nullifiers: message.new_nullifiers.clone(),
+        public_actions,
+        private_actions: message.private_actions.clone(),
         block_validity_window: message.block_validity_window,
         timestamp_validity_window: message.timestamp_validity_window,
     };
@@ -108,9 +110,9 @@ pub fn synthesize_passing_proof(
 }
 
 /// Build a fuzz-driven [`Account`] for use as a private commitment pre-image or a
-/// `public_post_state`.
+/// public action's post-state.
 ///
-/// The nonce is intentionally capped well below `u128::MAX`: a `public_post_state` is
+/// The nonce is intentionally capped well below `u128::MAX`: a public post-state is
 /// applied verbatim and a signer's nonce is then incremented, and the protocol's
 /// `public_account_nonce_increment` panics on overflow. An uncapped nonce would let the
 /// fuzzer drive a signer to `u128::MAX` via a forced-pass post-state and then trip that
@@ -146,7 +148,8 @@ pub(crate) fn arb_validity_window(u: &mut Unstructured<'_>) -> ArbResult<Validit
     Ok(ValidityWindow::try_from((from, to)).unwrap_or_else(|_| ValidityWindow::new_unbounded()))
 }
 
-/// Build one fuzz-driven [`EncryptedAccountData`] for `message.encrypted_private_post_states`.
+/// Build one fuzz-driven [`EncryptedAccountData`] for a [`PrivateAction`]'s
+/// `encrypted_post_state`.
 ///
 /// The executor does not validate the encrypted notes directly — they are only bound into the proof
 /// journal — so this needs no real recipient keys: the three fields are public, and the only one
@@ -158,14 +161,9 @@ fn arb_encrypted_account_data(u: &mut Unstructured<'_>) -> ArbResult<EncryptedAc
     let account = arb_account(u)?;
     let kind = PrivateAccountKind::Regular(u128::arbitrary(u)?);
     let shared_secret = SharedSecretKey(<[u8; 32]>::arbitrary(u)?);
-    let commitment = Commitment::new(&AccountId::new(<[u8; 32]>::arbitrary(u)?), &account);
-    let ciphertext = EncryptionScheme::encrypt(
-        &account,
-        &kind,
-        &shared_secret,
-        &commitment,
-        u32::arbitrary(u)?,
-    );
+    let nullifier =
+        Nullifier::for_account_initialization(&AccountId::new(<[u8; 32]>::arbitrary(u)?));
+    let ciphertext = EncryptionScheme::encrypt(&account, &kind, &shared_secret, &nullifier);
     Ok(EncryptedAccountData {
         ciphertext,
         epk: EphemeralPublicKey(<Vec<u8>>::arbitrary(u)?),
@@ -173,12 +171,56 @@ fn arb_encrypted_account_data(u: &mut Unstructured<'_>) -> ArbResult<EncryptedAc
     })
 }
 
+/// Build one fuzz-driven [`PrivateAction`].
+///
+/// The nullifier is derived from a random account id, so distinct draws collide only with
+/// negligible probability (the caller still deduplicates — validator check 2). The digest is
+/// the **live commitment-set root half the time** so check 6's `root_history` membership
+/// passes (the root history is seeded at genesis by the protocol's dummy commitment, so the
+/// live root is always a member) and the success path stays frequently reachable; a random
+/// digest drives the check-6 rejection path.
+fn arb_private_action(
+    u: &mut Unstructured<'_>,
+    live_root: CommitmentSetDigest,
+) -> ArbResult<PrivateAction> {
+    let null_aid = AccountId::new(<[u8; 32]>::arbitrary(u)?);
+    let nullifier = Nullifier::for_account_initialization(&null_aid);
+    let root: CommitmentSetDigest = if bool::arbitrary(u)? {
+        live_root
+    } else {
+        <[u8; 32]>::arbitrary(u)?
+    };
+    let commitment = Commitment::new(&AccountId::new(<[u8; 32]>::arbitrary(u)?), &arb_account(u)?);
+    Ok(PrivateAction {
+        nullifier,
+        root,
+        commitment,
+        encrypted_post_state: arb_encrypted_account_data(u)?,
+    })
+}
+
+/// Append `action` to `actions` unless its nullifier **or** its commitment already appears
+/// there — either duplicate *alone* trips validator check 2 (nullifiers and commitments must
+/// each be unique across a message's private actions), so a partial collision must be
+/// dropped just like a full one.
+pub(crate) fn push_private_action_if_unique(
+    actions: &mut Vec<PrivateAction>,
+    action: PrivateAction,
+) {
+    if !actions
+        .iter()
+        .any(|a| a.nullifier == action.nullifier || a.commitment == action.commitment)
+    {
+        actions.push(action);
+    }
+}
+
 /// Generate a privacy-preserving transaction aimed at the **state-transition executor**.
 ///
 /// The transaction is built to *frequently* pass every validation check up to and including
 /// proof verification (check 4) so that the previously-uncovered checks 5–6 and
 /// `apply_state_diff` are exercised, while fuzz-driven choices (mismatched nullifier digest,
-/// occasional garbage proof, duplicated/oversized field shapes, bounded validity windows that
+/// occasional garbage proof, duplicated field shapes, bounded validity windows that
 /// exclude the block/timestamp) still drive the rejection and isolation paths.
 ///
 /// `state` must be the *current* state the transaction will be validated against — the
@@ -220,11 +262,12 @@ pub fn arb_privacy_preserving_tx(
         .map(|id| state.get_account_by_id(*id).nonce)
         .collect();
 
-    // ── public_account_ids (must be unique — validator check 2) ──────────────────────
+    // ── public_actions (account ids must be unique — validator check 2) ──────────────
+    // Each action pairs an account id with its declared post-state; the id set mirrors the
+    // pre-bundling shape: sometimes the signers themselves (the common shape), otherwise
+    // signers are left out so the signer-nonce-increment invariant is exercised on an
+    // account that is *not* also overwritten by a post-state, plus up to 3 extra ids.
     let mut public_account_ids: Vec<AccountId> = Vec::new();
-    // Sometimes treat the signers themselves as updated public accounts (the common shape);
-    // otherwise leave them out so the signer-nonce-increment invariant is exercised on an
-    // account that is *not* also overwritten by a post-state.
     if bool::arbitrary(u)? {
         public_account_ids.extend_from_slice(&signer_ids);
     }
@@ -240,72 +283,39 @@ pub fn arb_privacy_preserving_tx(
             public_account_ids.push(id);
         }
     }
-
-    // ── public_post_states ──
-    // Range 0..=len+3 so lengths can exceed the public-account count, exercising
-    // both the truncation path and the oversized/length-mismatch path.
-    let n_post = (u8::arbitrary(u)? as usize) % (public_account_ids.len() + 4);
-    let public_post_states = std::iter::repeat_with(|| arb_account(u))
-        .take(n_post)
+    let public_actions = public_account_ids
+        .into_iter()
+        .map(|account_id| {
+            Ok(PublicActionWithID {
+                account_id,
+                post_state: arb_account(u)?,
+            })
+        })
         .collect::<ArbResult<Vec<_>>>()?;
 
-    // ── new_commitments (unique — validator check 2c; fresh against a genesis state) ──
-    let n_comm = (u8::arbitrary(u)? as usize) % 4;
-    let mut new_commitments: Vec<Commitment> = Vec::new();
-    for _ in 0..n_comm {
-        let aid = AccountId::new(<[u8; 32]>::arbitrary(u)?);
-        let acc = arb_account(u)?;
-        let commitment = Commitment::new(&aid, &acc);
-        if !new_commitments.contains(&commitment) {
-            new_commitments.push(commitment);
-        }
-    }
-
-    // ── new_nullifiers (unique — validator check 2b) ─────────────────────────────────
-    // Check 6 additionally requires each digest to be in the commitment set's `root_history`.
-    // `root_history` starts *empty* on a fresh genesis state and is only seeded once a
-    // commitment-bearing transaction applies (`CommitmentSet::extend` inserts the post-insert
-    // root). So a nullifier digest set to the live root only passes check 6 on a *later*
-    // transaction in the sequence — after an earlier tx grew the commitment set; against the
-    // first tx (empty history) even the live root is rejected. We still use the live root half
-    // the time so the success path becomes reachable once seeded; a random digest always drives
-    // the check-6 rejection path.
-    let n_null = (u8::arbitrary(u)? as usize) % 3;
+    // ── private_actions (unique nullifiers and commitments — validator check 2) ──────
+    // Check 6 additionally requires each action's digest to be in the commitment set's
+    // `root_history`. The protocol seeds the history at genesis (the `Default` state inserts
+    // a dummy commitment, recording the post-insert root), so an action bound to the live
+    // root passes check 6 even on the first transaction in a sequence; a random digest
+    // always drives the check-6 rejection path.
+    let n_priv = (u8::arbitrary(u)? as usize) % 4;
     let live_root = state.commitment_set_digest();
-    let mut new_nullifiers: Vec<(Nullifier, CommitmentSetDigest)> = Vec::new();
-    for _ in 0..n_null {
-        let aid = AccountId::new(<[u8; 32]>::arbitrary(u)?);
-        let nullifier = Nullifier::for_account_initialization(&aid);
-        let digest: CommitmentSetDigest = if bool::arbitrary(u)? {
-            live_root
-        } else {
-            <[u8; 32]>::arbitrary(u)?
-        };
-        if !new_nullifiers.iter().any(|(n, _)| n == &nullifier) {
-            new_nullifiers.push((nullifier, digest));
-        }
+    let mut private_actions: Vec<PrivateAction> = Vec::new();
+    for _ in 0..n_priv {
+        let action = arb_private_action(u, live_root)?;
+        push_private_action_if_unique(&mut private_actions, action);
     }
 
-    // Validator check 1: commitments OR nullifiers must be non-empty.
-    if new_commitments.is_empty() && new_nullifiers.is_empty() {
-        let aid = AccountId::new(<[u8; 32]>::arbitrary(u)?);
-        let acc = arb_account(u)?;
-        new_commitments.push(Commitment::new(&aid, &acc));
+    // Validator check 1: the private-action list must be non-empty.
+    if private_actions.is_empty() {
+        private_actions.push(arb_private_action(u, live_root)?);
     }
-
-    // ── encrypted_private_post_states (carried into the proof journal, not validated) ──
-    let n_enc = (u8::arbitrary(u)? as usize) % 3;
-    let encrypted_private_post_states = std::iter::repeat_with(|| arb_encrypted_account_data(u))
-        .take(n_enc)
-        .collect::<ArbResult<Vec<_>>>()?;
 
     let message = PPMessage {
-        public_account_ids,
+        public_actions,
         nonces,
-        public_post_states,
-        encrypted_private_post_states,
-        new_commitments,
-        new_nullifiers,
+        private_actions,
         block_validity_window: arb_validity_window(u)?,
         timestamp_validity_window: arb_validity_window(u)?,
     };
@@ -322,14 +332,14 @@ pub fn arb_privacy_preserving_tx(
     Ok(PrivacyPreservingTransaction::new(message, witness_set))
 }
 
-/// Build a minimal *pure-private* transaction: one signer, no public accounts, the given
-/// commitments and nullifiers, and unbounded validity windows.
+/// Build a minimal *pure-private* transaction: one signer, no public actions, the given
+/// private actions, and unbounded validity windows.
 ///
 /// Two properties matter for the ordering-independence oracle in
 /// `fuzz_transaction_ordering_independence`:
 ///
-/// * **`public_account_ids` is empty**, so `synthesize_passing_proof` reconstructs an empty
-///   `public_pre_states` and the journal does not depend on live chain state. The proof
+/// * **`public_actions` is empty**, so `synthesize_passing_proof` reconstructs an empty
+///   public-action list and the journal does not depend on live chain state. The proof
 ///   therefore stays valid at check 4 even after another transaction has mutated the state —
 ///   i.e. it is valid whether this tx is applied *first* or *second*. That is what lets us
 ///   apply the same transaction in both orderings and compare outcomes soundly.
@@ -340,17 +350,13 @@ pub fn arb_privacy_preserving_tx(
 fn build_pure_private_tx(
     state: &V03State,
     key: &PrivateKey,
-    new_commitments: Vec<Commitment>,
-    new_nullifiers: Vec<(Nullifier, CommitmentSetDigest)>,
+    private_actions: Vec<PrivateAction>,
 ) -> PrivacyPreservingTransaction {
     let signer_id = account_id_for_key(key);
     let message = PPMessage {
-        public_account_ids: Vec::new(),
+        public_actions: Vec::new(),
         nonces: vec![state.get_account_by_id(signer_id).nonce],
-        public_post_states: Vec::new(),
-        encrypted_private_post_states: Vec::new(),
-        new_commitments,
-        new_nullifiers,
+        private_actions,
         block_validity_window: ValidityWindow::new_unbounded(),
         timestamp_validity_window: ValidityWindow::new_unbounded(),
     };
@@ -363,11 +369,11 @@ fn build_pure_private_tx(
 /// (different signers, different fresh commitments) that both declare the **same** nullifier.
 ///
 /// The shared nullifier's digest is bound to the current commitment-set root
-/// (`state.commitment_set_digest()`); this only satisfies check 6's `root_history` membership
-/// once a commitment-bearing transaction has already grown the set, so callers should seed the
-/// state first (see the target). The two transactions are otherwise independently valid, so a
-/// correct state machine must accept *at most one* of them regardless of application order —
-/// the property the ordering-independence target asserts.
+/// (`state.commitment_set_digest()`), which is a member of `root_history` from genesis
+/// onwards (the protocol seeds the history with its dummy commitment), so check 6 passes for
+/// whichever transaction is applied first. The two transactions are otherwise independently
+/// valid, so a correct state machine must accept *at most one* of them regardless of
+/// application order — the property the ordering-independence target asserts.
 ///
 /// Returns `Err` when there are fewer than two distinct keyed accounts to draw signers from.
 pub fn arb_conflicting_nullifier_pair(
@@ -393,7 +399,7 @@ pub fn arb_conflicting_nullifier_pair(
     // One nullifier, shared by both transactions, bound to a historical commitment-set root.
     let root = state.commitment_set_digest();
     let null_aid = AccountId::new(<[u8; 32]>::arbitrary(u)?);
-    let shared_nullifiers = vec![(Nullifier::for_account_initialization(&null_aid), root)];
+    let shared_nullifier = Nullifier::for_account_initialization(&null_aid);
 
     // Distinct fresh commitments make the two transactions genuinely different (and keep them
     // from colliding with each other on check 5).
@@ -403,7 +409,20 @@ pub fn arb_conflicting_nullifier_pair(
         return Err(arbitrary::Error::IncorrectFormat);
     }
 
-    let tx_b = build_pure_private_tx(state, key_b, vec![comm_b], shared_nullifiers.clone());
-    let tx_c = build_pure_private_tx(state, key_c, vec![comm_c], shared_nullifiers);
+    let action_b = PrivateAction {
+        nullifier: shared_nullifier,
+        root,
+        commitment: comm_b,
+        encrypted_post_state: arb_encrypted_account_data(u)?,
+    };
+    let action_c = PrivateAction {
+        nullifier: shared_nullifier,
+        root,
+        commitment: comm_c,
+        encrypted_post_state: arb_encrypted_account_data(u)?,
+    };
+
+    let tx_b = build_pure_private_tx(state, key_b, vec![action_b]);
+    let tx_c = build_pure_private_tx(state, key_c, vec![action_c]);
     Ok((tx_b, tx_c))
 }
