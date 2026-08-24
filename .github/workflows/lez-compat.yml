@@ -28,10 +28,9 @@ jobs:
         with:
           ref: main
 
-      - name: Install Rust nightly
-        uses: dtolnay/rust-toolchain@nightly
-        with:
-          components: llvm-tools-preview
+      - name: Install Rust (upstream pin)
+        id: lez-rust
+        uses: ./.github/actions/lez-rust-toolchain
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -40,7 +39,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: lez-compat-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: lez-compat-${{ runner.os }}-rust-${{ steps.lez-rust.outputs.channel }}-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Build shared fuzz harness against upstream main
         run: cargo build -p fuzz_props --release

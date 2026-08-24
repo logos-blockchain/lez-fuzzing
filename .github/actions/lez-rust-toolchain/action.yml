@@ -1,0 +1,123 @@
+name: Install Rust (LEZ toolchains)
+description: >
+  Single source of truth for installing Rust in this repo's CI. Two modes:
+
+  toolchain: pin (default) — installs the channel pinned by
+  logos-execution-zone's rust-toolchain.toml, so jobs build with the exact
+  toolchain upstream CI uses. Requires the checkout-lez action to have run
+  first (it places the LEZ tree at $GITHUB_WORKSPACE/logos-execution-zone).
+
+  toolchain: nightly — installs the dated nightly-version below instead, for
+  jobs whose plain cargo invocations need nightly (cargo fuzz and its -Z
+  sanitizer flags). Dated rather than floating because a fresh nightly can add
+  a lint that trips LEZ's deny-warnings build; upstream's CI image freezes its
+  nightly the same way.
+
+  Either way the selected toolchain is exported as RUSTUP_TOOLCHAIN for all
+  subsequent steps in the job. This is load-bearing: this repo's own
+  rust-toolchain.toml pins floating nightly, which rustup gives precedence
+  over the default toolchain installed here — only the RUSTUP_TOOLCHAIN env
+  var ranks above it.
+
+inputs:
+  toolchain:
+    description: >
+      Which toolchain the job's plain cargo invocations should use:
+      "pin" (upstream LEZ pin) or "nightly" (the dated nightly-version below).
+    required: false
+    default: "pin"
+  nightly-version:
+    description: >
+      The dated nightly installed by toolchain: nightly. Bump deliberately,
+      after checking LEZ still compiles on the newer nightly.
+    required: false
+    default: nightly-2026-06-16
+  components:
+    description: >
+      Comma-separated rustup components to install (optional). When
+      llvm-tools-preview is among them, the step below also exports
+      LLVM_PROFDATA and LLVM_COV pointing into the installed toolchain's
+      sysroot, so coverage jobs never hand-roll that lookup.
+    required: false
+    default: ""
+  nightly:
+    description: >
+      Only meaningful with toolchain: pin. Set to "true" to also install a
+      minimal floating nightly, reachable via `cargo +nightly ...` (the +arg
+      outranks RUSTUP_TOOLCHAIN) — mirroring upstream's CI image (pinned
+      default + nightly for rustfmt). Off by default so callers that never
+      leave the pin don't pay for the extra install.
+    required: false
+    default: "false"
+  nightly-components:
+    description: >
+      Comma-separated rustup components to add to the extra floating nightly
+      (only used with nightly: true). Defaults to rustfmt, matching what
+      upstream's CI image bakes in for `cargo +nightly fmt`.
+    required: false
+    default: "rustfmt"
+
+outputs:
+  channel:
+    description: The toolchain installed and exported as RUSTUP_TOOLCHAIN.
+    value: ${{ steps.select.outputs.channel }}
+
+runs:
+  using: composite
+  steps:
+    - name: Select Rust toolchain
+      id: select
+      shell: bash
+      run: |
+        case "${{ inputs.toolchain }}" in
+          pin)
+            channel="$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' \
+              "$GITHUB_WORKSPACE/logos-execution-zone/rust-toolchain.toml")"
+            if [ -z "$channel" ]; then
+              echo "::error::could not read channel from logos-execution-zone/rust-toolchain.toml — did checkout-lez run first?"
+              exit 1
+            fi
+            echo "Upstream pins Rust $channel" >> "$GITHUB_STEP_SUMMARY"
+            ;;
+          nightly)
+            channel="${{ inputs.nightly-version }}"
+            echo "Job pinned to $channel" >> "$GITHUB_STEP_SUMMARY"
+            ;;
+          *)
+            echo "::error::invalid toolchain input '${{ inputs.toolchain }}' (expected 'pin' or 'nightly')"
+            exit 1
+            ;;
+        esac
+        echo "channel=$channel" >> "$GITHUB_OUTPUT"
+        echo "RUSTUP_TOOLCHAIN=$channel" >> "$GITHUB_ENV"
+
+    - name: Install Rust ${{ steps.select.outputs.channel }}
+      uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: ${{ steps.select.outputs.channel }}
+        components: ${{ inputs.components }}
+
+    # Every llvm-tools-preview consumer needs the same sysroot-relative binary
+    # paths; resolve them once here so jobs read $LLVM_PROFDATA / $LLVM_COV
+    # instead of each hand-rolling the rustc sysroot lookup.
+    - name: Export LLVM tool paths
+      if: ${{ contains(inputs.components, 'llvm-tools') }}
+      shell: bash
+      run: |
+        LLVM_BIN="$(rustc --print sysroot)/lib/rustlib/$(rustc -vV | awk '/^host:/{print $2}')/bin"
+        echo "LLVM_PROFDATA=${LLVM_BIN}/llvm-profdata" >> "$GITHUB_ENV"
+        echo "LLVM_COV=${LLVM_BIN}/llvm-cov" >> "$GITHUB_ENV"
+
+    # Plain rustup rather than dtolnay's action so the toolchain installed
+    # above stays the default.
+    - name: Install Rust nightly (minimal)
+      if: ${{ inputs.nightly == 'true' }}
+      shell: bash
+      run: |
+        if [ -n "${{ inputs.nightly-components }}" ]; then
+          rustup toolchain install nightly --profile minimal \
+            --component "${{ inputs.nightly-components }}"
+        else
+          rustup toolchain install nightly --profile minimal
+        fi
+        cargo +nightly --version
