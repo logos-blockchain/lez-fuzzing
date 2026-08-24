@@ -33,8 +33,9 @@ jobs:
       - name: Checkout logos-execution-zone
         uses: ./.github/actions/checkout-lez
 
-      - name: Install stable Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust (upstream pin)
+        id: rust
+        uses: ./.github/actions/lez-rust-toolchain
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -43,7 +44,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: mutants-harness-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: mutants-harness-${{ runner.os }}-rust-${{ steps.rust.outputs.channel }}-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Install cargo-mutants
         run: cargo install cargo-mutants --locked
@@ -116,12 +117,8 @@ jobs:
       - name: Checkout logos-execution-zone
         uses: ./.github/actions/checkout-lez
 
-      # cargo-fuzz requires nightly.
-      - name: Install Rust nightly toolchain
-        uses: dtolnay/rust-toolchain@nightly
-        with:
-          components: llvm-tools-preview
-
+      # The dated nightly isn't installed yet at restore time; the action file
+      # that pins it stands in for the channel in the key.
       - name: Cache cargo registry
         uses: actions/cache@v4
         with:
@@ -129,17 +126,13 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: mutants-protocol-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          key: mutants-protocol-${{ runner.os }}-rust-${{ hashFiles('.github/actions/lez-rust-toolchain/action.yml') }}-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Install cargo-fuzz and cargo-mutants
-        run: |
-          cargo install cargo-fuzz --locked
-          cargo install cargo-mutants --locked
+      - name: Set up libFuzzer toolchain
+        uses: ./.github/actions/setup-libfuzzer
 
-      # The corpus oracle runs the fuzz targets, which execute guest programs via
-      # risc0's ExternalProver — that needs the r0vm binary.
-      - name: Install r0vm
-        uses: ./.github/actions/install-r0vm
+      - name: Install cargo-mutants
+        run: cargo install cargo-mutants
 
       - name: Make corpus-regression wrapper executable
         run: chmod +x scripts/mutants-corpus-test.sh

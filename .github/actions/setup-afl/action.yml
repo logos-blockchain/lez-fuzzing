@@ -1,7 +1,11 @@
 name: Set up AFL++ toolchain
 description: >
-  Build and install AFL++ from source, then install the Rust stable toolchain
-  and cargo-afl. The repository must already be checked out before this runs.
+  Build and install AFL++ from source, then install the Rust toolchain pinned
+  by upstream LEZ (cargo-afl works on stable, unlike cargo-fuzz) and cargo-afl.
+  The repository and logos-execution-zone (checkout-lez) must already be
+  checked out before this runs. The exported RUSTUP_TOOLCHAIN keeps cargo-afl's
+  instrumentation runtime and later `cargo afl build` steps on the same
+  rustc/LLVM.
 
 inputs:
   afl-version:
@@ -27,8 +31,8 @@ runs:
         sudo make install
         afl-fuzz --version
 
-    - name: Install Rust (stable)
-      uses: dtolnay/rust-toolchain@stable
+    - name: Install Rust (upstream LEZ pin)
+      uses: ./.github/actions/lez-rust-toolchain
 
     - name: Install cargo-afl
       shell: bash

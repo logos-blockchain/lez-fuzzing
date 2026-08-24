@@ -34,8 +34,10 @@ jobs:
       - name: Checkout logos-execution-zone
         uses: ./.github/actions/checkout-lez
 
-      - name: Install nightly toolchain for rustfmt
-        run: rustup install nightly --profile minimal --component rustfmt
+      - name: Install Rust (upstream pin + nightly rustfmt)
+        uses: ./.github/actions/lez-rust-toolchain
+        with:
+          nightly: "true"
 
       - name: Check Rust files are formatted
         run: cargo +nightly fmt --check
@@ -53,8 +55,8 @@ jobs:
       - name: Checkout logos-execution-zone
         uses: ./.github/actions/checkout-lez
 
-      - name: Install nightly toolchain with clippy
-        uses: dtolnay/rust-toolchain@nightly
+      - name: Install Rust (upstream pin) with clippy
+        uses: ./.github/actions/lez-rust-toolchain
         with:
           components: clippy
 
@@ -67,4 +69,4 @@ jobs:
       - name: Lint workspace
         env:
           RISC0_DEV_MODE: "1"
-        run: cargo +nightly clippy --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings

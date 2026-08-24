@@ -3,13 +3,17 @@ description: >
   Install the Rust nightly toolchain (with llvm-tools-preview, required by
   cargo-fuzz and llvm-cov), cargo-fuzz, and the r0vm executor. The repository and
   logos-execution-zone must already be checked out before this runs.
+  cargo-fuzz hard-requires nightly (-Z sanitizer flags), so Rust comes from
+  lez-rust-toolchain in its dated-nightly mode; the dated version is defined
+  (and bumped) there.
 
 runs:
   using: composite
   steps:
-    - name: Install Rust nightly + llvm-tools-preview
-      uses: dtolnay/rust-toolchain@nightly
+    - name: Install Rust dated nightly + llvm-tools-preview
+      uses: ./.github/actions/lez-rust-toolchain
       with:
+        toolchain: nightly
         components: llvm-tools-preview
 
     - name: Install cargo-fuzz

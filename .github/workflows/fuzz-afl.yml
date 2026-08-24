@@ -258,8 +258,8 @@ jobs:
       - name: Checkout logos-execution-zone
         uses: ./.github/actions/checkout-lez
 
-      - name: Install Rust nightly + llvm-tools-preview
-        uses: dtolnay/rust-toolchain@nightly
+      - name: Install Rust (upstream pin) + llvm-tools-preview
+        uses: ./.github/actions/lez-rust-toolchain
         with:
           components: llvm-tools-preview
 
@@ -317,9 +317,6 @@ jobs:
           TARGET="${{ matrix.target }}"
           BINARY="fuzz/target/release/${TARGET}"
           PROFRAW_DIR="cov-work/profraw"
-          SYSROOT="$(rustc --print sysroot)"
-          HOST_TRIPLE="$(rustc -vV | awk '/^host:/{print $2}')"
-          LLVM_PROFDATA="${SYSROOT}/lib/rustlib/${HOST_TRIPLE}/bin/llvm-profdata"
           OUT="cov-out/${TARGET}"
           mkdir -p "$OUT"
           shopt -s nullglob
@@ -359,20 +356,10 @@ jobs:
       - name: Checkout logos-execution-zone
         uses: ./.github/actions/checkout-lez
 
-      - name: Install Rust nightly + llvm-tools-preview
-        uses: dtolnay/rust-toolchain@nightly
+      - name: Install Rust (upstream pin) + llvm-tools-preview
+        uses: ./.github/actions/lez-rust-toolchain
         with:
           components: llvm-tools-preview
-
-      - name: Locate LLVM tools
-        run: |
-          # Resolve the llvm-tools-preview binary paths once; downstream steps read
-          # $LLVM_PROFDATA / $LLVM_COV from the environment.
-          SYSROOT="$(rustc --print sysroot)"
-          HOST_TRIPLE="$(rustc -vV | awk '/^host:/{print $2}')"
-          LLVM_BIN="${SYSROOT}/lib/rustlib/${HOST_TRIPLE}/bin"
-          echo "LLVM_PROFDATA=${LLVM_BIN}/llvm-profdata" >> "$GITHUB_ENV"
-          echo "LLVM_COV=${LLVM_BIN}/llvm-cov" >> "$GITHUB_ENV"
 
       - name: Download all per-target coverage data
         uses: actions/download-artifact@v4
