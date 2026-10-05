@@ -660,11 +660,18 @@ fn arb_public_effects_count_uses_modulo_3() {
     let mut buf = vec![1_u8; 256];
     buf[0] = 5;
     let effects = arb_public_effects(&mut Unstructured::new(&buf)).expect("never errors");
-    assert_eq!(effects.len(), 2, "count byte 5 must yield 5 % 3 = 2 effects");
+    assert_eq!(
+        effects.len(),
+        2,
+        "count byte 5 must yield 5 % 3 = 2 effects"
+    );
 
     buf[0] = 255;
     let effects = arb_public_effects(&mut Unstructured::new(&buf)).expect("never errors");
-    assert!(effects.is_empty(), "count byte 255 must yield 255 % 3 = 0 effects");
+    assert!(
+        effects.is_empty(),
+        "count byte 255 must yield 255 % 3 = 0 effects"
+    );
 }
 
 /// A selector byte with `selector % 4 != 0` takes the native-token path: the effect names

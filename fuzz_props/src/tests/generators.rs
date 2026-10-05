@@ -128,12 +128,22 @@ fn reserved_account_ids_match_genesis_system_accounts() {
         "reserved ids must include the sequencer-stake config account"
     );
     for id in system_accounts::clock_account_ids() {
-        assert!(reserved.contains(&id), "reserved ids must include clock account {id:?}");
+        assert!(
+            reserved.contains(&id),
+            "reserved ids must include clock account {id:?}"
+        );
     }
     for id in system_accounts::fee_account_ids() {
-        assert!(reserved.contains(&id), "reserved ids must include fee account {id:?}");
+        assert!(
+            reserved.contains(&id),
+            "reserved ids must include fee account {id:?}"
+        );
     }
-    assert_eq!(reserved.len(), 8, "reserved ids must contain no extra entries");
+    assert_eq!(
+        reserved.len(),
+        8,
+        "reserved ids must contain no extra entries"
+    );
 
     // Every reserved id is one genesis actually populates.
     let state = crate::genesis::genesis_state(&[], vec![]);
