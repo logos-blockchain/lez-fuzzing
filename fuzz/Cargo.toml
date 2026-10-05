@@ -99,12 +99,6 @@ test = false
 bench = false
 
 [[bin]]
-name = "fuzz_program_deployment_lifecycle"
-path = "fuzz_targets/fuzz_program_deployment_lifecycle.rs"
-test = false
-bench = false
-
-[[bin]]
 name = "fuzz_apply_state_diff_split_path"
 path = "fuzz_targets/fuzz_apply_state_diff_split_path.rs"
 test = false

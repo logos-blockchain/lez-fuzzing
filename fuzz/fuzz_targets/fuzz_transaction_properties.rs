@@ -9,7 +9,7 @@ use common::transaction::LeeTransaction;
 use fuzz_props::arbitrary_types::ArbPrivateKey;
 use fuzz_props::generators::{arb_fuzz_native_transfer, arbitrary_fuzz_state};
 use nssa::{
-    AccountId, PrivateKey, PublicKey, ValidatedStateDiff,
+    AccountId, PrivateKey, ProgramShardSelector, PublicKey, ValidatedStateDiff,
     public_transaction::{Message, WitnessSet},
     PublicTransaction,
 };
@@ -32,8 +32,11 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
 
         let nonces = vec![Nonce::from(0_u128), Nonce::from(0_u128)];
         let message = Message::try_new(
-            programs::authenticated_transfer().id(),
-            vec![addr1, addr2],
+            nssa_core::native_token::NATIVE_TOKEN_PROGRAM_ID,
+            vec![
+                ProgramShardSelector::native_balance(addr1),
+                ProgramShardSelector::native_balance(addr2),
+            ],
             nonces,
             1337_u64,
         )
@@ -138,8 +141,11 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
         if signer_addr != other1 && signer_addr != other2 {
             let nonces = vec![Nonce::from(0_u128)];
             if let Ok(msg) = Message::try_new(
-                programs::authenticated_transfer().id(),
-                vec![other1, other2],
+                nssa_core::native_token::NATIVE_TOKEN_PROGRAM_ID,
+                vec![
+                    ProgramShardSelector::native_balance(other1),
+                    ProgramShardSelector::native_balance(other2),
+                ],
                 nonces,
                 7_u64,
             ) {
@@ -234,8 +240,8 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
 
             let nonces = vec![Nonce::from(0_u128)];
             if let Ok(msg) = Message::try_new(
-                programs::authenticated_transfer().id(),
-                vec![addr],
+                nssa_core::native_token::NATIVE_TOKEN_PROGRAM_ID,
+                vec![ProgramShardSelector::native_balance(addr)],
                 nonces,
                 42_u64,
             ) {

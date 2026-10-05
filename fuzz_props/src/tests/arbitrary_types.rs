@@ -25,33 +25,7 @@ fn arb_lee_transaction_zero_byte_selects_public() {
     let arb = ArbLeeTransaction::arbitrary(&mut u).expect("should succeed");
     assert!(
         matches!(arb.0, LeeTransaction::Public(_)),
-        "expected Public variant: with first byte=0 and `% 2`, arm 0 (Public) is selected"
-    );
-}
-
-#[test]
-fn arb_lee_transaction_byte4_selects_public() {
-    // Place 4 as the first byte (variant selector); rest are zeros.
-    let mut buf = vec![0_u8; 4096];
-    buf[0] = 4;
-    let mut u = Unstructured::new(&buf);
-    let arb = ArbLeeTransaction::arbitrary(&mut u).expect("should succeed");
-    assert!(
-        matches!(arb.0, LeeTransaction::Public(_)),
-        "expected Public variant: `4 % 2 = 0` \u{2192} arm 0; \
-         mutant `4 / 2 = 2` or `4 + 2 = 6` maps to `_` \u{2192} ProgramDeployment"
-    );
-}
-
-/// Generates from all-1 bytes: `1 % 2 = 1` -> `_` -> `ProgramDeployment`.
-#[test]
-fn arb_lee_transaction_one_byte_selects_program_deployment() {
-    let buf = vec![1_u8; 4096];
-    let mut u = Unstructured::new(&buf);
-    let arb = ArbLeeTransaction::arbitrary(&mut u).expect("should succeed");
-    assert!(
-        matches!(arb.0, LeeTransaction::ProgramDeployment(_)),
-        "expected ProgramDeployment variant with first byte=1"
+        "ArbLeeTransaction must generate the Public variant"
     );
 }
 

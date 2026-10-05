@@ -2,6 +2,24 @@ use common::transaction::LeeTransaction;
 use nssa::V03State;
 use nssa_core::account::Nonce;
 
+/// Native-token balance of `account_id` in `state`.
+///
+/// LEZ stores the native balance in the account's native-token shard rather than in a
+/// dedicated field; an absent shard reads as zero.
+///
+/// # Panics
+///
+/// Panics if the shard does not decode as a balance — the protocol only ever writes
+/// well-formed balances there, so a malformed one is itself a violation.
+#[must_use]
+pub fn native_balance(state: &V03State, account_id: nssa::AccountId) -> u128 {
+    state
+        .get_account_by_id(account_id)
+        .data
+        .native_balance()
+        .expect("INVARIANT VIOLATION [NativeBalanceEncoding]: native-token shard does not decode")
+}
+
 /// Snapshot of public account balances used for conservation checks.
 #[derive(Clone, Debug)]
 pub struct BalanceSnapshot(pub std::collections::HashMap<nssa::AccountId, u128>);
@@ -83,7 +101,7 @@ impl ProtocolInvariant for StateIsolationOnFailure {
     fn check(&self, ctx: &InvariantCtx<'_>) -> Option<InvariantViolation> {
         if !ctx.execution_succeeded {
             for (acc_id, &expected_balance) in &ctx.balances_before.0 {
-                let actual_balance = ctx.state_after.get_account_by_id(*acc_id).balance;
+                let actual_balance = native_balance(ctx.state_after, *acc_id);
                 if actual_balance != expected_balance {
                     return Some(InvariantViolation {
                         invariant: self.name(),
@@ -126,7 +144,7 @@ impl ProtocolInvariant for BalanceConservation {
                 .balances_before
                 .0
                 .keys()
-                .map(|&id| ctx.state_after.get_account_by_id(id).balance)
+                .map(|&id| native_balance(ctx.state_after, id))
                 .try_fold(0_u128, u128::checked_add)
                 .expect(
                     "INVARIANT VIOLATION [BalanceOverflow]: sum of post-execution account balances \
@@ -281,8 +299,6 @@ pub fn assert_replay_rejection(
 ///     .collect();
 /// ```
 ///
-/// For `LeeTransaction::ProgramDeployment`, there are no signers; pass an empty slice.
-///
 /// # Why a standalone function?
 ///
 /// `apply_state_diff` consumes the `ValidatedStateDiff`, whose `signer_account_ids` field
@@ -356,7 +372,7 @@ pub fn assert_nonce_increment_correctness(
 /// ```rust,ignore
 /// let state_snapshot = state.clone();
 /// let balances_before = BalanceSnapshot(
-///     accounts.iter().map(|&(id, _)| (id, state.get_account_by_id(id).balance)).collect(),
+///     accounts.iter().map(|&(id, _)| (id, native_balance(&state, id))).collect(),
 /// );
 /// let nonces_before = NonceSnapshot(
 ///     accounts.iter().map(|&(id, _)| (id, state.get_account_by_id(id).nonce)).collect(),
@@ -398,7 +414,7 @@ pub fn assert_tx_execution_invariants<E>(
 
     // ── Two success-only invariants ───────────────────────────────────────────
     if let Ok(applied_tx) = execution_result {
-        // Derive signer IDs from the witness set.  ProgramDeployment has no signers.
+        // Derive signer IDs from the witness set.
         let signer_ids: Vec<nssa::AccountId> = match &applied_tx {
             LeeTransaction::Public(pt) => pt
                 .witness_set()
@@ -412,7 +428,6 @@ pub fn assert_tx_execution_invariants<E>(
                 .iter()
                 .map(|(_, pk)| nssa::AccountId::from(pk))
                 .collect(),
-            LeeTransaction::ProgramDeployment(_) => vec![],
         };
         assert_nonce_increment_correctness(&signer_ids, &nonces_for_nonce_check, state_after);
         let (next_block_id, next_timestamp) = replay_context;

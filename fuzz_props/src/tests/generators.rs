@@ -93,14 +93,11 @@ fn fuzz_state_count_uses_modulo_not_div_or_add() {
 
 #[test]
 fn fuzz_state_excludes_reserved_system_ids() {
-    // Genesis overwrites the faucet (balance = u128::MAX) and bridge accounts after
-    // inserting the supplied genesis accounts; a generated account colliding with one
+    // Genesis overwrites the bridge (balance = u128::MAX) and the other system accounts
+    // after inserting the supplied genesis accounts; a generated account colliding with one
     // would read back a balance the cap never produced, overflowing conservation sums.
     // The generator must therefore never emit a reserved system ID.
-    let reserved = [
-        system_accounts::faucet_account_id(),
-        system_accounts::bridge_account_id(),
-    ];
+    let reserved = crate::genesis::reserved_account_ids();
     let buf = distinct_byte_buffer(10_000);
     let mut u = Unstructured::new(&buf);
     let accounts = arbitrary_fuzz_state(&mut u).expect("should succeed");

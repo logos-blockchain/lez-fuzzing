@@ -78,7 +78,7 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
             let public_diff = diff.public_diff();
 
             // INVARIANT 2a (forward): every account in the diff matches the post-execute state.
-            for (account_id, expected_account) in &public_diff {
+            for (account_id, expected_account) in public_diff {
                 let actual = exec_state.get_account_by_id(*account_id);
                 assert_eq!(
                     *expected_account,
@@ -139,7 +139,7 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
                 .collect();
             let total_before: u128 = known_ids
                 .iter()
-                .map(|id| state.get_account_by_id(*id).balance)
+                .map(|id| fuzz_props::invariants::native_balance(&state, *id))
                 .try_fold(0u128, |acc, x| acc.checked_add(x))
                 .expect(
                     "INVARIANT VIOLATION [BalanceOverflow]: pre-execution sum of known account \
@@ -148,7 +148,7 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
                 );
             let total_after: u128 = known_ids
                 .iter()
-                .map(|id| exec_state.get_account_by_id(*id).balance)
+                .map(|id| fuzz_props::invariants::native_balance(&exec_state, *id))
                 .try_fold(0u128, |acc, x| acc.checked_add(x))
                 .expect(
                     "INVARIANT VIOLATION [BalanceOverflow]: post-execution sum of known account \

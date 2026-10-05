@@ -199,10 +199,10 @@ fn assert_state_agreement(state: &nssa::V03State, model: &Model, step: usize, wh
     for (&id, &(model_bal, model_nonce)) in &model.accounts {
         let acc = state.get_account_by_id(id);
         assert_eq!(
-            acc.balance, model_bal,
+            acc.data.native_balance(), Ok(model_bal),
             "INVARIANT VIOLATION [ModelStateAgreement]: balance diverged from reference model \
-             at step {step} after {what} for account {id:?} — real={}, model={model_bal}",
-            acc.balance,
+             at step {step} after {what} for account {id:?} — real={:?}, model={model_bal}",
+            acc.data.native_balance(),
         );
         assert_eq!(
             acc.nonce.0, model_nonce,

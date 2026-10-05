@@ -58,7 +58,7 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
     let balances_before = BalanceSnapshot(
         init_accs
             .iter()
-            .map(|&(id, _)| (id, state.get_account_by_id(id).balance))
+            .map(|&(id, _)| (id, fuzz_props::invariants::native_balance(&state, id)))
             .collect(),
     );
     let nonces_before = NonceSnapshot(

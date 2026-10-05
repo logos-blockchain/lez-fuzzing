@@ -27,7 +27,6 @@ pub fn signer_account_ids(tx: &common::transaction::LeeTransaction) -> Vec<nssa:
             .iter()
             .map(|(_, pk)| nssa::AccountId::from(pk))
             .collect(),
-        LeeTransaction::ProgramDeployment(_) => vec![],
     }
 }
 
@@ -78,12 +77,12 @@ pub struct FuzzAccount {
 /// The cap above is only sound if every generated balance survives genesis construction
 /// unchanged.  Two failure modes break that:
 ///
-/// * **Reserved system accounts.** [`crate::genesis::genesis_state`] inserts the faucet
-///   account (`balance = u128::MAX`), the bridge account, and the clock accounts *after* the
-///   supplied genesis accounts, overwriting any generated account whose ID collides.  A fuzzer
-///   that lands on the faucet ID would make a caller read back `u128::MAX` instead of the
-///   capped balance it generated, overflowing the conservation sum — a harness false positive,
-///   not a protocol bug.  The clock IDs are equally overwritten, so they are excluded too.
+/// * **Reserved system accounts.** [`crate::genesis::genesis_state`] inserts the bridge
+///   account (`balance = u128::MAX`) and the clock, sequencer-stake and fee accounts *after*
+///   the supplied genesis accounts, overwriting any generated account whose ID collides.  A
+///   fuzzer that lands on the bridge ID would make a caller read back `u128::MAX` instead of
+///   the capped balance it generated, overflowing the conservation sum — a harness false
+///   positive, not a protocol bug.  See [`crate::genesis::reserved_account_ids`].
 /// * **Duplicate IDs.** Genesis stores accounts in a `HashMap` keyed by ID, so duplicate
 ///   IDs collapse to a single (last-write-wins) account, while a caller's per-ID balance sum
 ///   double-counts that account's balance.
@@ -93,13 +92,7 @@ pub struct FuzzAccount {
 /// non-reserved IDs whose generated balances match what genesis stores — so `0..=8`
 /// accounts are returned (an empty state is a valid degenerate case).
 pub fn arbitrary_fuzz_state(u: &mut Unstructured<'_>) -> arbitrary::Result<Vec<FuzzAccount>> {
-    let reserved: Vec<AccountId> = [
-        system_accounts::faucet_account_id(),
-        system_accounts::bridge_account_id(),
-    ]
-    .into_iter()
-    .chain(system_accounts::clock_account_ids())
-    .collect();
+    let reserved = crate::genesis::reserved_account_ids();
     let n = ((u8::arbitrary(u)? as usize) % 8) + 1; // 1..=8
 
     let mut seen = std::collections::HashSet::with_capacity(n);
@@ -151,7 +144,8 @@ pub(crate) fn biased_valid_nonce_amount(
 /// exercise **successful** state transitions rather than only rejection paths.
 ///
 /// Self-transfers (`from_idx == to_idx`) are allowed since they are a useful
-/// edge case (balance should remain unchanged).
+/// edge case: the protocol rejects them (duplicate shard selectors), so they
+/// drive that rejection path.
 ///
 /// The `nonce`/`amount` draw is biased toward valid inputs so the success path
 /// is actually reached, with a minority branch for the rejection paths.

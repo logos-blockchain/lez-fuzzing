@@ -55,7 +55,7 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
     // Record starting balances for the long-range conservation check.
     let starting_total: u128 = init_accs
         .iter()
-        .map(|&(id, _)| state.get_account_by_id(id).balance)
+        .map(|&(id, _)| fuzz_props::invariants::native_balance(&state, id))
         .try_fold(0u128, |acc, x| acc.checked_add(x))
         .expect(
             "INVARIANT VIOLATION [BalanceOverflow]: initial sum of genesis account balances \
@@ -87,7 +87,7 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
         let balances_before = BalanceSnapshot(
             init_accs
                 .iter()
-                .map(|&(id, _)| (id, state.get_account_by_id(id).balance))
+                .map(|&(id, _)| (id, fuzz_props::invariants::native_balance(&state, id)))
                 .collect(),
         );
         let nonces_before = NonceSnapshot(
@@ -122,7 +122,7 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
     // interactions across the full sequence).
     let ending_total: u128 = init_accs
         .iter()
-        .map(|&(id, _)| state.get_account_by_id(id).balance)
+        .map(|&(id, _)| fuzz_props::invariants::native_balance(&state, id))
         .try_fold(0u128, |acc, x| acc.checked_add(x))
         .expect(
             "INVARIANT VIOLATION [BalanceOverflow]: final sum of genesis account balances \

@@ -57,6 +57,7 @@ fn synthesized_proof_reaches_checks_5_6_and_applies() {
         private_actions: vec![action],
         block_validity_window: BlockValidityWindow::new_unbounded(),
         timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
+        program_image_claims: vec![],
     };
 
     let proof = synthesize_passing_proof(&message, &state, &[]);
@@ -114,6 +115,7 @@ fn synthesized_proof_is_rejected_without_dev_mode() {
         private_actions: vec![action],
         block_validity_window: BlockValidityWindow::new_unbounded(),
         timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
+        program_image_claims: vec![],
     };
 
     let proof = synthesize_passing_proof(&message, &state, &[]);
@@ -192,8 +194,8 @@ fn arb_account_nonce_capped_below_1024() {
     }
 }
 
-/// Each of `arb_account`'s three explicit fields must be sourced from the fuzz
-/// bytes, not left at `Account::default()` — deleting any field assignment leaves
+/// Both of `arb_account`'s explicit fields must be sourced from the fuzz
+/// bytes, not left at `Account::default()` — deleting either assignment leaves
 /// the corresponding field at its (zero) default.
 #[test]
 fn arb_account_fields_are_populated_from_fuzz_bytes() {
@@ -203,11 +205,8 @@ fn arb_account_fields_are_populated_from_fuzz_bytes() {
     let default = Account::default();
 
     assert_ne!(
-        acc.program_owner, default.program_owner,
-        "program_owner must be drawn from the fuzz bytes, not left at its default"
-    );
-    assert_ne!(
-        acc.balance, default.balance,
+        acc.data.native_balance(),
+        default.data.native_balance(),
         "balance must be drawn from the fuzz bytes, not left at its default"
     );
     assert_ne!(
