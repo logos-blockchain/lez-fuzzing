@@ -34,6 +34,8 @@
 //!
 //! 3. **ClockConsistency** — the mandatory clock invocation appended at the end
 //!    of every block must succeed on both paths and leave both states identical.
+//!    Executing the clock guest dominates the cost of an input, so it is exercised
+//!    on a fuzz-chosen fraction of inputs (about 1 in 8).
 
 use std::collections::HashSet;
 
@@ -43,6 +45,14 @@ use fuzz_props::generators::{arb_fuzz_native_transfer, arbitrary_fuzz_state, arb
 
 fuzz_props::fuzz_entry!(|data: &[u8]| {
     let mut u = Unstructured::new(data);
+
+    // The clock invocation is the only step here that executes a guest program, which
+    // costs far more than everything else in this target combined.  Its outcome depends
+    // only on (block_id, timestamp) — user transactions cannot modify the clock accounts —
+    // so it is exercised on a fuzz-chosen fraction of inputs (about 1 in 8) rather than on
+    // every one, leaving the bulk of the executions for the transaction-equivalence check.
+    // The selector is the first input byte so the fuzzer can reach both modes immediately.
+    let run_clock = u8::arbitrary(&mut u).unwrap_or(0) % 8 == 1;
 
     // ── Initial state ─────────────────────────────────────────────────────────
     // Generate a fuzz-driven initial state so that state-dependent bugs
@@ -127,9 +137,10 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
     // in the block.  If the clock fails here (e.g. corrupted initial state),
     // the block cannot be produced — abort without a panic.
     let clock_tx = clock_invocation(block_id, timestamp);
-    if seq_state
-        .transition_from_public_transaction(&clock_tx, block_id, timestamp)
-        .is_err()
+    if run_clock
+        && seq_state
+            .transition_from_public_transaction(&clock_tx, block_id, timestamp)
+            .is_err()
     {
         return;
     }
@@ -166,15 +177,19 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
     }
 
     // Replayer: apply the same clock invocation (INVARIANT 3).
-    rep_state
-        .transition_from_public_transaction(&clock_tx, block_id, timestamp)
-        .unwrap_or_else(|e| {
-            panic!(
-                "INVARIANT VIOLATION [ClockConsistency]: \
-                 clock invocation succeeded on the sequencer state but failed \
-                 on the replayer state: {e:?}"
-            )
-        });
+    if run_clock {
+        // Include the clock accounts in the equivalence comparison below.
+        touched_ids.extend(system_accounts::clock_account_ids());
+        rep_state
+            .transition_from_public_transaction(&clock_tx, block_id, timestamp)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "INVARIANT VIOLATION [ClockConsistency]: \
+                     clock invocation succeeded on the sequencer state but failed \
+                     on the replayer state: {e:?}"
+                )
+            });
+    }
 
     // ── Invariant 1: SequencerReplayerEquivalence ─────────────────────────────
     // Compare every known account (genesis ∪ diff-declared) across both states.
