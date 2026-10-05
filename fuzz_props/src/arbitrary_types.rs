@@ -23,8 +23,7 @@
 use arbitrary::{Arbitrary, Result as ArbResult, Unstructured};
 use common::{HashType, block::HashableBlockData, transaction::LeeTransaction};
 use nssa::{
-    AccountId, PrivateKey, PublicKey, Signature,
-    program_deployment_transaction::ProgramDeploymentTransaction,
+    AccountId, FeeDeclaration, PrivateKey, ProgramShardSelector, PublicKey, Signature,
     public_transaction::{Message, PublicTransaction, WitnessSet},
 };
 use nssa_core::account::Nonce;
@@ -130,8 +129,8 @@ impl<'a> Arbitrary<'a> for ArbPublicKey {
 
 // ── Message (public transaction) ──────────────────────────────────────────────
 // `Message::new_preserialized` takes all fields directly without any validity
-// constraint — any combination of program_id, account_ids, nonces, and
-// instruction_data is accepted.
+// constraint — any combination of program account id, shard selectors, nonces,
+// instruction_data, and fee declaration is accepted.
 
 /// Newtype wrapper providing [`Arbitrary`] for the public-transaction [`Message`].
 #[derive(Debug)]
@@ -139,21 +138,38 @@ pub struct ArbPubTxMessage(pub Message);
 
 impl<'a> Arbitrary<'a> for ArbPubTxMessage {
     fn arbitrary(u: &mut Unstructured<'a>) -> ArbResult<Self> {
-        let program_id: [u32; 8] = <[u32; 8]>::arbitrary(u)?;
-        // Generate 0–7 accounts; nonces vector is given the same length.
+        let program_account_id = ArbAccountId::arbitrary(u)?.0;
+        // Generate 0–7 shard selectors; nonces vector is given the same length.
         let len = (u8::arbitrary(u)? as usize) % 8;
-        let account_ids = std::iter::repeat_with(|| ArbAccountId::arbitrary(u).map(|a| a.0))
-            .take(len)
-            .collect::<ArbResult<Vec<_>>>()?;
+        let shard_selectors = std::iter::repeat_with(|| {
+            Ok(ProgramShardSelector::new(
+                ArbAccountId::arbitrary(u)?.0,
+                ArbAccountId::arbitrary(u)?.0,
+            ))
+        })
+        .take(len)
+        .collect::<ArbResult<Vec<_>>>()?;
         let nonces = std::iter::repeat_with(|| ArbNonce::arbitrary(u).map(|n| n.0))
             .take(len)
             .collect::<ArbResult<Vec<_>>>()?;
-        let instruction_data: Vec<u32> = Vec::<u32>::arbitrary(u)?;
+        let instruction_data: Vec<u8> = Vec::<u8>::arbitrary(u)?;
+        // `None` is a fee-exempt (system) message; `Some` carries arbitrary fee fields.
+        let fee = if bool::arbitrary(u)? {
+            Some(FeeDeclaration::new(
+                ArbAccountId::arbitrary(u)?.0,
+                u64::arbitrary(u)?,
+                u64::arbitrary(u)?,
+                u128::arbitrary(u)?,
+            ))
+        } else {
+            None
+        };
         Ok(Self(Message::new_preserialized(
-            program_id,
-            account_ids,
+            program_account_id,
+            shard_selectors,
             nonces,
             instruction_data,
+            fee,
         )))
     }
 }
@@ -195,21 +211,6 @@ impl<'a> Arbitrary<'a> for ArbPublicTransaction {
     }
 }
 
-// ── ProgramDeploymentTransaction ──────────────────────────────────────────────
-// `ProgramDeploymentTransaction` wraps a single `Message { bytecode: Vec<u8> }`.
-
-/// Newtype wrapper providing [`Arbitrary`] for [`ProgramDeploymentTransaction`].
-#[derive(Debug)]
-pub struct ArbProgramDeploymentTransaction(pub ProgramDeploymentTransaction);
-
-impl<'a> Arbitrary<'a> for ArbProgramDeploymentTransaction {
-    fn arbitrary(u: &mut Unstructured<'a>) -> ArbResult<Self> {
-        let bytecode = Vec::<u8>::arbitrary(u)?;
-        let msg = nssa::program_deployment_transaction::Message::new(bytecode);
-        Ok(Self(ProgramDeploymentTransaction::new(msg)))
-    }
-}
-
 // ── LeeTransaction ───────────────────────────────────────────────────────────
 // `PrivacyPreservingTransaction` is intentionally excluded *here*: a passing proof
 // binds to the live chain state, so it cannot be produced by a state-independent
@@ -219,20 +220,16 @@ impl<'a> Arbitrary<'a> for ArbProgramDeploymentTransaction {
 
 /// Newtype wrapper providing [`Arbitrary`] for [`LeeTransaction`].
 ///
-/// Generates `Public` and `ProgramDeployment` variants only.
+/// Generates the `Public` variant only (LEZ removed the dedicated program-deployment
+/// transaction; deployment now goes through the `program_loader` program).
 #[derive(Debug)]
 pub struct ArbLeeTransaction(pub LeeTransaction);
 
 impl<'a> Arbitrary<'a> for ArbLeeTransaction {
     fn arbitrary(u: &mut Unstructured<'a>) -> ArbResult<Self> {
-        match u8::arbitrary(u)? % 2 {
-            0 => Ok(Self(LeeTransaction::Public(
-                ArbPublicTransaction::arbitrary(u)?.0,
-            ))),
-            _ => Ok(Self(LeeTransaction::ProgramDeployment(
-                ArbProgramDeploymentTransaction::arbitrary(u)?.0,
-            ))),
-        }
+        Ok(Self(LeeTransaction::Public(
+            ArbPublicTransaction::arbitrary(u)?.0,
+        )))
     }
 }
 

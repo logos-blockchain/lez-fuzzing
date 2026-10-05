@@ -9,11 +9,12 @@ use common::transaction::LeeTransaction;
 use fuzz_props::arbitrary_types::ArbPrivateKey;
 use fuzz_props::generators::{arb_fuzz_native_transfer, arbitrary_fuzz_state};
 use nssa::{
-    AccountId, PrivateKey, PublicKey, ValidatedStateDiff,
+    AccountId, PrivateKey, ProgramShardSelector, PublicKey, ValidatedStateDiff,
     public_transaction::{Message, WitnessSet},
     PublicTransaction,
 };
 use nssa_core::account::Nonce;
+use nssa_core::native_token::{Instruction, NATIVE_TOKEN_PROGRAM_ID};
 
 fuzz_props::fuzz_entry!(|data: &[u8]| {
     let mut u = Unstructured::new(data);
@@ -32,10 +33,13 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
 
         let nonces = vec![Nonce::from(0_u128), Nonce::from(0_u128)];
         let message = Message::try_new(
-            programs::authenticated_transfer().id(),
-            vec![addr1, addr2],
+            NATIVE_TOKEN_PROGRAM_ID,
+            vec![
+                ProgramShardSelector::native_balance(addr1),
+                ProgramShardSelector::native_balance(addr2),
+            ],
             nonces,
-            1337_u64,
+            Instruction::Transfer { amount: 1337 },
         )
         .expect("known-good message");
 
@@ -117,14 +121,14 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
 
     // ── INVARIANT [SignerOnlyAccountInAffected] ───────────────────────────────
     // Build a transaction signed by a key whose AccountId is NOT among
-    // `message.account_ids`.  Then `affected_public_account_ids` can only contain
+    // `message.shard_selectors`.  Then `affected_public_account_ids` can only contain
     // the signer's AccountId via `signer_account_ids()` — it is absent from the
-    // message's account list.  This directly catches the `signer_account_ids`
+    // message's selector list.  This directly catches the `signer_account_ids`
     // mutations (`→ vec![]` / `→ vec![Default::default()]`) on PublicTransaction,
     // which the earlier checks miss because there the signer also appears in
-    // `message.account_ids`.
+    // `message.shard_selectors`.
     {
-        // Signer key — its AccountId must NOT appear in the message account list.
+        // Signer key — its AccountId must NOT appear in the message's shard selectors.
         let signer_key = PrivateKey::try_new([9_u8; 32]).expect("known-good key");
         let signer_pub = PublicKey::new_from_private_key(&signer_key);
         let signer_addr = AccountId::from(&signer_pub);
@@ -138,10 +142,13 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
         if signer_addr != other1 && signer_addr != other2 {
             let nonces = vec![Nonce::from(0_u128)];
             if let Ok(msg) = Message::try_new(
-                programs::authenticated_transfer().id(),
-                vec![other1, other2],
+                NATIVE_TOKEN_PROGRAM_ID,
+                vec![
+                    ProgramShardSelector::native_balance(other1),
+                    ProgramShardSelector::native_balance(other2),
+                ],
                 nonces,
-                7_u64,
+                Instruction::Transfer { amount: 7 },
             ) {
                 let ws = WitnessSet::for_message(&msg, &[&signer_key]);
                 let pt = PublicTransaction::new(msg, ws);
@@ -151,7 +158,7 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
                     affected.contains(&signer_addr),
                     "INVARIANT VIOLATION [SignerOnlyAccountInAffected]: \
                      affected_public_account_ids must include the signer {:?} even when it \
-                     is absent from message.account_ids — signer_account_ids() must not \
+                     is absent from message.shard_selectors — signer_account_ids() must not \
                      return an empty (or defaulted) vec",
                     signer_addr,
                 );
@@ -234,10 +241,10 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
 
             let nonces = vec![Nonce::from(0_u128)];
             if let Ok(msg) = Message::try_new(
-                programs::authenticated_transfer().id(),
-                vec![addr],
+                NATIVE_TOKEN_PROGRAM_ID,
+                vec![ProgramShardSelector::native_balance(addr)],
                 nonces,
-                42_u64,
+                Instruction::Transfer { amount: 42 },
             ) {
                 let ws = WitnessSet::for_message(&msg, &[&key]);
                 let pt = PublicTransaction::new(msg, ws);

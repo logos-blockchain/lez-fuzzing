@@ -20,7 +20,9 @@ use nssa::{
 };
 use nssa_core::{
     PrivacyPreservingCircuitOutput, PublicAction,
-    account::{Account, AccountWithMetadata, Nonce},
+    account::Nonce,
+    execution_state::DeferredPublicEffect,
+    native_token::NATIVE_TOKEN_PROGRAM_ID,
     program::{BlockValidityWindow, TimestampValidityWindow},
 };
 
@@ -34,12 +36,13 @@ fn minimal_message() -> PPMessage {
     PPMessage {
         public_actions: vec![PublicActionWithID {
             account_id: addr,
-            post_state: Account::default(),
+            effects: vec![],
         }],
         nonces: vec![Nonce::from(0_u128)],
         private_actions: vec![],
         block_validity_window: BlockValidityWindow::new_unbounded(),
         timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
+        program_image_claims: vec![],
     }
 }
 
@@ -122,20 +125,22 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
             ),
         );
         let nonces = vec![Nonce::from(7_u128)];
-        let pre_state = Account::default();
-        let post_state = Account {
-            balance: 42,
-            ..Account::default()
-        };
+        let effects = vec![DeferredPublicEffect {
+            program_account_id: NATIVE_TOKEN_PROGRAM_ID,
+            shard_program_account_id: NATIVE_TOKEN_PROGRAM_ID,
+            data: vec![42],
+        }];
 
         let output = PrivacyPreservingCircuitOutput {
             public_actions: vec![PublicAction {
-                pre: AccountWithMetadata::new(pre_state, true, addr),
-                post: post_state.clone(),
+                account_id: addr,
+                is_authorized: true,
+                effects: effects.clone(),
             }],
             private_actions: vec![],
             block_validity_window: BlockValidityWindow::new_unbounded(),
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
+            program_image_claims: vec![],
         };
 
         let msg = PPMessage::from_circuit_output(nonces.clone(), output);
@@ -144,7 +149,7 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
             msg.public_account_ids(),
             vec![addr],
             "INVARIANT VIOLATION [CircuitOutputMapping]: \
-             public action account ids not carried from the circuit output's pre-states",
+             public action account ids not carried from the circuit output",
         );
         assert_eq!(
             msg.nonces, nonces,
@@ -154,10 +159,10 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
             msg.public_actions,
             vec![PublicActionWithID {
                 account_id: addr,
-                post_state,
+                effects,
             }],
             "INVARIANT VIOLATION [CircuitOutputMapping]: \
-             public post-states not carried from the circuit output",
+             public effects not carried from the circuit output",
         );
         assert!(
             msg.private_actions.is_empty(),
@@ -195,7 +200,7 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
                 let pk = PublicKey::new_from_private_key(&key);
                 public_actions.push(PublicActionWithID {
                     account_id: AccountId::from(&pk),
-                    post_state: Account::default(),
+                    effects: vec![],
                 });
                 nonces.push(Nonce::from(i as u128));
             }
@@ -207,6 +212,7 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
             private_actions: vec![],
             block_validity_window: BlockValidityWindow::new_unbounded(),
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
+            program_image_claims: vec![],
         };
 
         let encoded = msg.to_bytes();

@@ -22,10 +22,12 @@
 //! * **CommitmentInsertion** — every commitment in an accepted transaction is a member of
 //!   the commitment set afterwards (check 5 reached and applied).
 //! * **NonceIncrementCorrectness** — an accepted transaction increments each signer's public
-//!   account nonce by exactly one (bug class #5: nonce-increment asymmetry); asserted on
-//!   signers not also overwritten as a public post-state.
-//! * **PostStateApplied** — each non-signer public account is set to its declared
-//!   post-state.
+//!   account nonce by exactly one (bug class #5: nonce-increment asymmetry).
+//! * **PublicEffectsApplied** — each public account of an accepted transaction equals its
+//!   pre-state with the action's native `Debit`/`Credit` effects folded in order (and the
+//!   signer nonce increment, if it signed); nothing else about the account changes. An
+//!   accepted transaction whose effects would underflow or overflow the balance is itself a
+//!   violation.
 //! * **ReplayRejection** — re-applying an accepted transaction is rejected.
 
 use arbitrary::{Arbitrary, Unstructured};
@@ -37,6 +39,7 @@ use fuzz_props::invariants::{
 };
 use fuzz_props::privacy::arb_privacy_preserving_tx;
 use nssa::AccountId;
+use nssa_core::native_token::{Effect as NativeEffect, NATIVE_TOKEN_PROGRAM_ID, encode_balance};
 
 fuzz_props::fuzz_entry!(|data: &[u8]| {
     let mut u = Unstructured::new(data);
@@ -92,7 +95,7 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
         let balances_before = BalanceSnapshot(
             tracked
                 .iter()
-                .map(|&id| (id, state.get_account_by_id(id).balance))
+                .map(|&id| (id, fuzz_props::invariants::native_balance(&state, id)))
                 .collect(),
         );
         let nonces_before = NonceSnapshot(
@@ -145,26 +148,51 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
             }
 
             // Bug class #5 — the privacy path increments the nonce on the signer's *public*
-            // account. Assert it for signers that are not also overwritten verbatim by a
-            // public post-state (those are set then incremented, so nonce_before+1 need not
-            // hold).
-            let isolated_signers: Vec<AccountId> = signer_ids
-                .iter()
-                .copied()
-                .filter(|id| !public_account_ids.contains(id))
-                .collect();
-            assert_nonce_increment_correctness(&isolated_signers, &nonces_before, &state);
+            // account. Effects only touch shards, never the nonce, so this holds for every
+            // signer.
+            assert_nonce_increment_correctness(&signer_ids, &nonces_before, &state);
 
-            // Non-signer public accounts are set to their declared post-state.
-            for action in &public_actions {
+            // Each public account is its pre-state with the action's effects folded in order.
+            // Only native-token effects on the native shard are modelled here; an action
+            // carrying any other effect is skipped (it needs a deployed guest to apply).
+            'actions: for action in &public_actions {
+                let mut expected = state_before.get_account_by_id(action.account_id);
+                let mut balance = fuzz_props::invariants::native_balance(
+                    &state_before,
+                    action.account_id,
+                );
+                for effect in &action.effects {
+                    if effect.program_account_id != NATIVE_TOKEN_PROGRAM_ID
+                        || effect.shard_program_account_id != NATIVE_TOKEN_PROGRAM_ID
+                    {
+                        continue 'actions;
+                    }
+                    let native: NativeEffect = borsh::from_slice(&effect.data).expect(
+                        "INVARIANT VIOLATION [PublicEffectsApplied]: transaction accepted with \
+                         an undecodable native effect",
+                    );
+                    balance = match native {
+                        NativeEffect::Debit(amount) => balance.checked_sub(amount),
+                        NativeEffect::Credit(amount) => balance.checked_add(amount),
+                    }
+                    .expect(
+                        "INVARIANT VIOLATION [PublicEffectsApplied]: transaction accepted although \
+                         a native effect underflows or overflows the account balance",
+                    );
+                }
+                if !action.effects.is_empty() {
+                    expected
+                        .data
+                        .set_shard(NATIVE_TOKEN_PROGRAM_ID, encode_balance(balance));
+                }
                 if signer_ids.contains(&action.account_id) {
-                    continue; // signer accounts also get a nonce increment afterwards
+                    expected.nonce.public_account_nonce_increment();
                 }
                 assert_eq!(
                     state.get_account_by_id(action.account_id),
-                    action.post_state,
-                    "INVARIANT VIOLATION [PostStateApplied]: public account was not set to its \
-                     declared post-state",
+                    expected,
+                    "INVARIANT VIOLATION [PublicEffectsApplied]: public account is not its \
+                     pre-state with the declared native effects folded in",
                 );
             }
 

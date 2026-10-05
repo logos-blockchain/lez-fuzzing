@@ -120,7 +120,6 @@ just fuzz-regression
 | `fuzz_validate_execute_consistency` | `validate_on_state` and `execute_check_on_state` must agree on success/failure; diff accuracy (forward + reverse); **BalanceConservation** on success | `fuzz/fuzz_targets/fuzz_validate_execute_consistency.rs` |
 | `fuzz_state_serialization` | `V03State` Borsh no-panic (**NoPanic**) + **StateSerializationRoundtrip** (`encode(decode(encode(decode(data)))) == encode(decode(data))`) + **NullifierDeduplication** (hand-written `NullifierSet` deserializer returns `Err`, not panic, on duplicate nullifiers) | `fuzz/fuzz_targets/fuzz_state_serialization.rs` |
 | `fuzz_witness_set_verification` | `WitnessSet::is_valid_for` no-panic on adversarial input (**NoPanic**); **CorrectVerification** (`WitnessSet::for_message` always passes `is_valid_for` on the same message); **MessageIsolation** (witness set built for message A fails `is_valid_for` on any Borsh-distinct message B) | `fuzz/fuzz_targets/fuzz_witness_set_verification.rs` |
-| `fuzz_program_deployment_lifecycle` | `V03State::transition_from_program_deployment_transaction` no-panic on arbitrary WASM bytecode (**NoPanic**); **BalanceIsolation** (successful deployment must not move tokens); **StateIsolationOnFailure** (failed deployment must not change any genesis account balance or nonce) | `fuzz/fuzz_targets/fuzz_program_deployment_lifecycle.rs` |
 | `fuzz_apply_state_diff_split_path` | **SplitPathEquivalence**: for every known account, `validate_on_state` + `apply_state_diff` must produce exactly the same balance, nonce, data, and program_owner as `execute_check_on_state`; **NonceIncrementCorrectness**: nonce after the split path equals nonce after the direct path for all signer accounts (catches bugs in the two-step `apply_state_diff` nonce-increment logic) | `fuzz/fuzz_targets/fuzz_apply_state_diff_split_path.rs` |
 | `fuzz_multi_block_state_sequence` | **LongRangeBalanceConservation**: total genesis-account balance identical before and after all N (≤ 16) blocks; **FailedTxNonceStability**: every genesis-account nonce unchanged after a rejected transaction; **PerBlockReplayRejection**: every transaction accepted in block B is rejected in block B+1 (cumulative nonce-interaction coverage) | `fuzz/fuzz_targets/fuzz_multi_block_state_sequence.rs` |
 | `fuzz_sequencer_vs_replayer` | **SequencerReplayerEquivalence**: for every known account (genesis ∪ diff-declared), the sequencer path (`validate_on_state` → `apply_state_diff`) and the replayer path (`execute_check_on_state`) must produce identical balance, nonce, data, and program_owner after applying a full block of up to 8 transactions plus the mandatory clock invocation; **ReplayerAcceptsAllSequencerTxs**: every transaction accepted by `validate_on_state` must also be accepted by `execute_check_on_state`; **ClockConsistency**: the mandatory clock invocation must succeed on both paths and leave both states identical | `fuzz/fuzz_targets/fuzz_sequencer_vs_replayer.rs` |
@@ -389,8 +388,8 @@ The nightly AFL++ CI workflow has two jobs:
 
 | Job | Triggers | Matrix |
 |-----|----------|--------|
-| `afl-smoke` | nightly + `workflow_dispatch` | all 23 targets, 60 s each |
-| `afl-coverage-aggregate` | nightly, `needs: afl-smoke` | all 23 targets merged into one LLVM HTML report |
+| `afl-smoke` | nightly + `workflow_dispatch` | all 22 targets, 60 s each |
+| `afl-coverage-aggregate` | nightly, `needs: afl-smoke` | all 22 targets merged into one LLVM HTML report |
 
 The smoke job (one matrix leg per target, on `ubuntu-latest`):
 1. Builds AFL++ from source, then builds the target with `cargo afl build --no-default-features --features fuzzer-afl`
@@ -400,7 +399,7 @@ The smoke job (one matrix leg per target, on `ubuntu-latest`):
 
 The coverage-aggregate job:
 1. Downloads every smoke leg's findings
-2. Rebuilds all 23 targets with `RUSTFLAGS="-C instrument-coverage"`
+2. Rebuilds all 22 targets with `RUSTFLAGS="-C instrument-coverage"`
 3. Runs all checked-in corpus + AFL queue inputs through each binary
 4. Merges every `.profraw` → one `.profdata` → a single combined HTML report via `llvm-cov show`
 
@@ -624,7 +623,6 @@ Measured on a 4-core x86_64 Linux runner with `RISC0_DEV_MODE=1`:
 | `fuzz_validate_execute_consistency` | ~3 000 exec/sec |
 | `fuzz_state_serialization` | ~100 000 exec/sec *(estimate)* |
 | `fuzz_witness_set_verification` | ~15 000 exec/sec *(estimate)* |
-| `fuzz_program_deployment_lifecycle` | ~4 000 exec/sec *(estimate)* |
 | `fuzz_apply_state_diff_split_path` | ~5 000 exec/sec *(estimate)* |
 | `fuzz_multi_block_state_sequence` | ~1 000 exec/sec *(estimate)* |
 | `fuzz_sequencer_vs_replayer` | ~2 000 exec/sec *(estimate)* |

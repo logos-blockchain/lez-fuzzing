@@ -34,6 +34,8 @@
 //!
 //! 3. **ClockConsistency** — the mandatory clock invocation appended at the end
 //!    of every block must succeed on both paths and leave both states identical.
+//!    Executing the clock guest dominates the cost of an input, so it is exercised
+//!    on a fuzz-chosen fraction of inputs (about 1 in 8).
 
 use std::collections::HashSet;
 
@@ -43,6 +45,14 @@ use fuzz_props::generators::{arb_fuzz_native_transfer, arbitrary_fuzz_state, arb
 
 fuzz_props::fuzz_entry!(|data: &[u8]| {
     let mut u = Unstructured::new(data);
+
+    // The clock invocation is the only step here that executes a guest program, which
+    // costs far more than everything else in this target combined.  Its outcome depends
+    // only on (block_id, timestamp) — user transactions cannot modify the clock accounts —
+    // so it is exercised on a fuzz-chosen fraction of inputs (about 1 in 8) rather than on
+    // every one, leaving the bulk of the executions for the transaction-equivalence check.
+    // The selector is the first input byte so the fuzzer can reach both modes immediately.
+    let run_clock = u8::arbitrary(&mut u).unwrap_or(0) % 8 == 1;
 
     // ── Initial state ─────────────────────────────────────────────────────────
     // Generate a fuzz-driven initial state so that state-dependent bugs
@@ -56,13 +66,12 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
         .map(|a| (a.account_id, a.balance))
         .collect();
 
-    // Both pipelines use the same block_id and timestamp, drawn from the fuzz corpus
-    // so the fuzzer can explore clock-dependent and block-ID-dependent code paths.
-    // The invariant is path-equivalence at every (block_id, timestamp); it does not
-    // require either value to be constant.  If the protocol rejects block_id=0 or
-    // timestamp=0 as structurally invalid, the existing clock-failure guard below
-    // (lines ~130-133) will return early without panicking — no extra guard needed.
-    let block_id: u64 = u64::arbitrary(&mut u).unwrap_or(2);
+    // Both pipelines use the same block_id and timestamp.  The clock program requires
+    // each block id to advance its stored id by exactly one, and genesis stores 0, so
+    // the only block the clock invocation accepts here is block 1; any other id would
+    // make the clock-failure guard below return early on every input.  The timestamp
+    // is drawn from the fuzz corpus so clock-dependent code paths stay explorable.
+    let block_id: u64 = 1;
     let timestamp: u64 = u64::arbitrary(&mut u).unwrap_or(1_000);
 
     // Shared base state — cloned once for each pipeline.
@@ -118,7 +127,7 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
         }
 
         // Sequencer: apply_state_diff consumes the diff and mutates seq_state.
-        seq_state.apply_state_diff(diff);
+        drop(seq_state.apply_state_diff(diff));
 
         // Save the accepted transaction for the replayer phase.
         accepted_txs.push(tx);
@@ -127,10 +136,11 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
     // Sequencer: append the mandatory clock invocation as the last transaction
     // in the block.  If the clock fails here (e.g. corrupted initial state),
     // the block cannot be produced — abort without a panic.
-    let clock_tx = clock_invocation(timestamp);
-    if seq_state
-        .transition_from_public_transaction(&clock_tx, block_id, timestamp)
-        .is_err()
+    let clock_tx = clock_invocation(block_id, timestamp);
+    if run_clock
+        && seq_state
+            .transition_from_public_transaction(&clock_tx, block_id, timestamp)
+            .is_err()
     {
         return;
     }
@@ -167,15 +177,19 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
     }
 
     // Replayer: apply the same clock invocation (INVARIANT 3).
-    rep_state
-        .transition_from_public_transaction(&clock_tx, block_id, timestamp)
-        .unwrap_or_else(|e| {
-            panic!(
-                "INVARIANT VIOLATION [ClockConsistency]: \
-                 clock invocation succeeded on the sequencer state but failed \
-                 on the replayer state: {e:?}"
-            )
-        });
+    if run_clock {
+        // Include the clock accounts in the equivalence comparison below.
+        touched_ids.extend(system_accounts::clock_account_ids());
+        rep_state
+            .transition_from_public_transaction(&clock_tx, block_id, timestamp)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "INVARIANT VIOLATION [ClockConsistency]: \
+                     clock invocation succeeded on the sequencer state but failed \
+                     on the replayer state: {e:?}"
+                )
+            });
+    }
 
     // ── Invariant 1: SequencerReplayerEquivalence ─────────────────────────────
     // Compare every known account (genesis ∪ diff-declared) across both states.
@@ -186,13 +200,13 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
         let rep_acc = rep_state.get_account_by_id(*acc_id);
 
         assert_eq!(
-            seq_acc.balance,
-            rep_acc.balance,
+            seq_acc.data.native_balance(),
+            rep_acc.data.native_balance(),
             "INVARIANT VIOLATION [SequencerReplayerEquivalence]: balance diverges \
-             for account {:?} — sequencer={} replayer={}",
+             for account {:?} — sequencer={:?} replayer={:?}",
             acc_id,
-            seq_acc.balance,
-            rep_acc.balance,
+            seq_acc.data.native_balance(),
+            rep_acc.data.native_balance(),
         );
 
         assert_eq!(
@@ -213,12 +227,5 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
             acc_id,
         );
 
-        assert_eq!(
-            seq_acc.program_owner,
-            rep_acc.program_owner,
-            "INVARIANT VIOLATION [SequencerReplayerEquivalence]: program_owner \
-             diverges for account {:?}",
-            acc_id,
-        );
     }
 });

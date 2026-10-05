@@ -2,8 +2,8 @@ use arbitrary::Unstructured;
 
 use crate::generators::{FuzzAccount, account_id_for_key};
 use crate::privacy::{
-    arb_account, arb_conflicting_nullifier_pair, arb_privacy_preserving_tx, arb_validity_window,
-    push_private_action_if_unique, synthesize_passing_proof,
+    arb_account, arb_conflicting_nullifier_pair, arb_privacy_preserving_tx, arb_public_effects,
+    arb_validity_window, push_private_action_if_unique, synthesize_passing_proof,
 };
 use nssa::privacy_preserving_transaction::{Message as PPMessage, WitnessSet as PPWitnessSet};
 use nssa::{AccountId, PrivacyPreservingTransaction, PrivateKey, V03State};
@@ -57,6 +57,7 @@ fn synthesized_proof_reaches_checks_5_6_and_applies() {
         private_actions: vec![action],
         block_validity_window: BlockValidityWindow::new_unbounded(),
         timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
+        program_image_claims: vec![],
     };
 
     let proof = synthesize_passing_proof(&message, &state, &[]);
@@ -114,6 +115,7 @@ fn synthesized_proof_is_rejected_without_dev_mode() {
         private_actions: vec![action],
         block_validity_window: BlockValidityWindow::new_unbounded(),
         timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
+        program_image_claims: vec![],
     };
 
     let proof = synthesize_passing_proof(&message, &state, &[]);
@@ -192,8 +194,8 @@ fn arb_account_nonce_capped_below_1024() {
     }
 }
 
-/// Each of `arb_account`'s three explicit fields must be sourced from the fuzz
-/// bytes, not left at `Account::default()` — deleting any field assignment leaves
+/// Both of `arb_account`'s explicit fields must be sourced from the fuzz
+/// bytes, not left at `Account::default()` — deleting either assignment leaves
 /// the corresponding field at its (zero) default.
 #[test]
 fn arb_account_fields_are_populated_from_fuzz_bytes() {
@@ -203,11 +205,8 @@ fn arb_account_fields_are_populated_from_fuzz_bytes() {
     let default = Account::default();
 
     assert_ne!(
-        acc.program_owner, default.program_owner,
-        "program_owner must be drawn from the fuzz bytes, not left at its default"
-    );
-    assert_ne!(
-        acc.balance, default.balance,
+        acc.data.native_balance(),
+        default.data.native_balance(),
         "balance must be drawn from the fuzz bytes, not left at its default"
     );
     assert_ne!(
@@ -650,4 +649,75 @@ fn arb_conflicting_nullifier_pair_indexes_in_range() {
             "signers must be drawn from the account set"
         );
     }
+}
+
+/// The effect count is the first byte reduced `% 3`, so it stays in `0..=2`. With a count
+/// byte of `5` that is `5 % 3 = 2` (a `/` would give 1); with `255` it is `255 % 3 = 0`
+/// (a `/` would give 85).
+#[test]
+fn arb_public_effects_count_uses_modulo_3() {
+    // Selector bytes of 1 keep every effect on the cheap native path.
+    let mut buf = vec![1_u8; 256];
+    buf[0] = 5;
+    let two_effects = arb_public_effects(&mut Unstructured::new(&buf)).expect("never errors");
+    assert_eq!(
+        two_effects.len(),
+        2,
+        "count byte 5 must yield 5 % 3 = 2 effects"
+    );
+
+    buf[0] = 255;
+    let no_effects = arb_public_effects(&mut Unstructured::new(&buf)).expect("never errors");
+    assert!(
+        no_effects.is_empty(),
+        "count byte 255 must yield 255 % 3 = 0 effects"
+    );
+}
+
+/// A selector byte with `selector % 4 != 0` takes the native-token path: the effect names
+/// the native-token program and shard and carries a borsh-encoded `Debit`/`Credit`. A
+/// selector of `1` distinguishes `%` from `/` (`1 / 4 == 0` would take the other path).
+#[test]
+fn arb_public_effects_nonzero_selector_is_native_effect() {
+    use nssa_core::native_token::{Effect, NATIVE_TOKEN_PROGRAM_ID};
+
+    // [count=1, selector=1, amount (16 bytes of 0x07), debit/credit bool, ...]
+    let mut buf = vec![0x07_u8; 64];
+    buf[0] = 1;
+    buf[1] = 1;
+    let effects = arb_public_effects(&mut Unstructured::new(&buf)).expect("never errors");
+    assert_eq!(effects.len(), 1);
+    let effect = &effects[0];
+    assert_eq!(effect.program_account_id, NATIVE_TOKEN_PROGRAM_ID);
+    assert_eq!(effect.shard_program_account_id, NATIVE_TOKEN_PROGRAM_ID);
+    let decoded: Effect =
+        borsh::from_slice(&effect.data).expect("native effect data must decode as an Effect");
+    let amount = match decoded {
+        Effect::Debit(amount) | Effect::Credit(amount) => amount,
+    };
+    assert_eq!(
+        amount,
+        u128::from_le_bytes([0x07; 16]),
+        "the amount must be drawn from the fuzz bytes"
+    );
+}
+
+/// A selector byte with `selector % 4 == 0` takes the arbitrary-program path: both ids are
+/// drawn from the fuzz bytes. A selector of `4` distinguishes `%` from `/` (`4 / 4 == 1`
+/// would take the native path) and `==` from `!=`.
+#[test]
+fn arb_public_effects_zero_selector_is_arbitrary_program_effect() {
+    use nssa_core::native_token::NATIVE_TOKEN_PROGRAM_ID;
+
+    // [count=1, selector=4, program id (32 x 0xAA), shard program id (32 x 0xBB), data...]
+    let mut buf = vec![1_u8, 4];
+    buf.extend([0xAA_u8; 32]);
+    buf.extend([0xBB_u8; 32]);
+    buf.extend([0_u8; 8]);
+    let effects = arb_public_effects(&mut Unstructured::new(&buf)).expect("never errors");
+    assert_eq!(effects.len(), 1);
+    let effect = &effects[0];
+    assert_eq!(effect.program_account_id, AccountId::new([0xAA; 32]));
+    assert_eq!(effect.shard_program_account_id, AccountId::new([0xBB; 32]));
+    assert_ne!(effect.program_account_id, NATIVE_TOKEN_PROGRAM_ID);
 }

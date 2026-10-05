@@ -14,7 +14,7 @@ inputs:
       `just update-lez`, replace this SHA, and open a PR. The scheduled
       lez-compat workflow overrides this with `main` to detect upstream drift.
     required: false
-    default: d6e4ae694e7419f5906b340c232704466a1917b7
+    default: 411adc8fdb3f4c3af64354c4fc26d3e4a6a3d3f4
 
 runs:
   using: composite

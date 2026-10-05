@@ -21,9 +21,10 @@
 //! `../privacy_preserving_coverage_gap.md`).
 //!
 //! [`synthesize_passing_proof`] takes the per-message route: it reconstructs the exact
-//! [`PrivacyPreservingCircuitOutput`] the validator will build — including the `pre` half
-//! of each [`PublicAction`], which the validator reads from live chain state — then builds
-//! a [`FakeReceipt`] whose `ReceiptClaim::ok` matches that journal. Check 4 then passes for
+//! [`PrivacyPreservingCircuitOutput`] the validator will build — including each
+//! [`PublicAction`]'s `is_authorized` bit, which the validator derives from the witness set,
+//! and each disclosed program-image claim, which it re-reads from live chain state — then
+//! builds a [`FakeReceipt`] whose `ReceiptClaim::ok` matches that journal. Check 4 then passes for
 //! that specific (message, state) pair, and execution proceeds into checks 5–6 and state
 //! application.
 //!
@@ -48,9 +49,11 @@ use nssa::{
 };
 use nssa_core::{
     Commitment, CommitmentSetDigest, EncryptedAccountData, EncryptionScheme, EphemeralPublicKey,
-    Nullifier, PrivacyPreservingCircuitOutput, PrivateAccountKind, PrivateAction, PublicAction,
-    SharedSecretKey,
-    account::{Account, AccountWithMetadata, Nonce},
+    Identifier, Nullifier, PrivacyPreservingCircuitOutput, PrivateAccountKind, PrivateAction,
+    ProgramImageClaim, PublicAction, SharedSecretKey,
+    account::{Account, Nonce},
+    execution_state::DeferredPublicEffect,
+    native_token::{Effect as NativeEffect, NATIVE_TOKEN_PROGRAM_ID},
     program::ValidityWindow,
 };
 use risc0_zkvm::{FakeReceipt, InnerReceipt, ReceiptClaim};
@@ -62,7 +65,7 @@ use crate::generators::{FuzzAccount, account_id_for_key};
 ///
 /// `signer_account_ids` must be the ids the validator will derive from the witness set —
 /// i.e. `AccountId::from(public_key)` for every key the message is signed with. They drive
-/// the `is_authorized` flag of each reconstructed `PublicAction::pre`, so they must match
+/// the `is_authorized` flag of each reconstructed [`PublicAction`], so they must match
 /// the witness set exactly or the journal digest diverges and the proof is rejected at
 /// check 4.
 ///
@@ -76,19 +79,32 @@ pub fn synthesize_passing_proof(
     signer_account_ids: &[AccountId],
 ) -> Proof {
     // Reconstruct each `PublicAction` byte-for-byte as
-    // `ValidatedStateDiff::from_privacy_preserving_transaction` does: read each public
-    // account's pre-state from live chain state (marking it authorised iff it signed) and
-    // pair it with the message's declared post-state.
+    // `ValidatedStateDiff::from_privacy_preserving_transaction` does: mark each public
+    // account authorised iff it signed and pair it with the message's deferred effects.
     let public_actions: Vec<PublicAction> = message
         .public_actions
         .iter()
         .map(|action| PublicAction {
-            pre: AccountWithMetadata::new(
-                state.get_account_by_id(action.account_id),
-                signer_account_ids.contains(&action.account_id),
-                action.account_id,
-            ),
-            post: action.post_state.clone(),
+            account_id: action.account_id,
+            is_authorized: signer_account_ids.contains(&action.account_id),
+            effects: action.effects.clone(),
+        })
+        .collect();
+
+    // The validator re-anchors each `Disclosed` claim to the image id stored on chain. A
+    // claim naming an unknown program is rejected before proof verification, so its value
+    // here is irrelevant and the message's own claim is kept.
+    let program_image_claims = message
+        .program_image_claims
+        .iter()
+        .map(|claim| match claim {
+            ProgramImageClaim::Disclosed { account_id, .. } => state
+                .get_program_image_id(*account_id)
+                .map_or(*claim, |image_id| ProgramImageClaim::Disclosed {
+                    account_id: *account_id,
+                    image_id,
+                }),
+            ProgramImageClaim::Undisclosed { .. } => *claim,
         })
         .collect();
 
@@ -97,6 +113,7 @@ pub fn synthesize_passing_proof(
         private_actions: message.private_actions.clone(),
         block_validity_window: message.block_validity_window,
         timestamp_validity_window: message.timestamp_validity_window,
+        program_image_claims,
     };
 
     // `ReceiptClaim::ok` fixes exit code Halted(0) and binds (image_id, journal_digest);
@@ -109,21 +126,46 @@ pub fn synthesize_passing_proof(
     Proof::from_inner(proof_bytes)
 }
 
-/// Build a fuzz-driven [`Account`] for use as a private commitment pre-image or a
-/// public action's post-state.
+/// Build a fuzz-driven [`Account`] for use as a private commitment pre-image.
 ///
-/// The nonce is intentionally capped well below `u128::MAX`: a public post-state is
-/// applied verbatim and a signer's nonce is then incremented, and the protocol's
-/// `public_account_nonce_increment` panics on overflow. An uncapped nonce would let the
-/// fuzzer drive a signer to `u128::MAX` via a forced-pass post-state and then trip that
-/// panic — a self-inflicted artefact, not a protocol bug.
+/// The balance lives in the native-token shard; the nonce is kept small.
 pub(crate) fn arb_account(u: &mut Unstructured<'_>) -> ArbResult<Account> {
     Ok(Account {
-        program_owner: <[u32; 8]>::arbitrary(u)?,
-        balance: u128::arbitrary(u)?,
         nonce: Nonce(u128::arbitrary(u)? % 1024),
-        ..Account::default()
+        ..Account::funded(u128::arbitrary(u)?)
     })
+}
+
+/// Build the fuzz-driven deferred effects of one public action (0..=2 of them).
+///
+/// Settlement folds each effect through the program it names. Most draws are native-token
+/// `Debit`/`Credit` effects, which the protocol recomputes itself and so can actually apply
+/// (or be rejected for insufficient balance / overflow); the rest name an arbitrary program
+/// with arbitrary data, driving the unknown-program and malformed-effect rejection paths.
+pub(crate) fn arb_public_effects(u: &mut Unstructured<'_>) -> ArbResult<Vec<DeferredPublicEffect>> {
+    let n = (u8::arbitrary(u)? as usize) % 3;
+    std::iter::repeat_with(|| {
+        if (u8::arbitrary(u)? % 4) == 0 {
+            return Ok(DeferredPublicEffect {
+                program_account_id: AccountId::new(<[u8; 32]>::arbitrary(u)?),
+                shard_program_account_id: AccountId::new(<[u8; 32]>::arbitrary(u)?),
+                data: <Vec<u8>>::arbitrary(u)?,
+            });
+        }
+        let amount = u128::arbitrary(u)?;
+        let effect = if bool::arbitrary(u)? {
+            NativeEffect::Debit(amount)
+        } else {
+            NativeEffect::Credit(amount)
+        };
+        Ok(DeferredPublicEffect {
+            program_account_id: NATIVE_TOKEN_PROGRAM_ID,
+            shard_program_account_id: NATIVE_TOKEN_PROGRAM_ID,
+            data: borsh_to_vec(&effect).expect("native effect is borsh-serialisable"),
+        })
+    })
+    .take(n)
+    .collect()
 }
 
 /// Build a fuzz-driven block/timestamp [`ValidityWindow`].
@@ -159,11 +201,11 @@ pub(crate) fn arb_validity_window(u: &mut Unstructured<'_>) -> ArbResult<Validit
 /// synthesised proof binds whatever we produce, so checks 5-6 + apply stay reachable.
 fn arb_encrypted_account_data(u: &mut Unstructured<'_>) -> ArbResult<EncryptedAccountData> {
     let account = arb_account(u)?;
-    let kind = PrivateAccountKind::Regular(u128::arbitrary(u)?);
+    let kind = PrivateAccountKind::Regular(Identifier::new(<[u8; 32]>::arbitrary(u)?));
     let shared_secret = SharedSecretKey(<[u8; 32]>::arbitrary(u)?);
     let nullifier =
         Nullifier::for_account_initialization(&AccountId::new(<[u8; 32]>::arbitrary(u)?));
-    let ciphertext = EncryptionScheme::encrypt(&account, &kind, &shared_secret, &nullifier);
+    let ciphertext = EncryptionScheme::encrypt(&account, &kind, &shared_secret, &nullifier, None);
     Ok(EncryptedAccountData {
         ciphertext,
         epk: EphemeralPublicKey(<Vec<u8>>::arbitrary(u)?),
@@ -263,10 +305,10 @@ pub fn arb_privacy_preserving_tx(
         .collect();
 
     // ── public_actions (account ids must be unique — validator check 2) ──────────────
-    // Each action pairs an account id with its declared post-state; the id set mirrors the
+    // Each action pairs an account id with its deferred effects; the id set mirrors the
     // pre-bundling shape: sometimes the signers themselves (the common shape), otherwise
     // signers are left out so the signer-nonce-increment invariant is exercised on an
-    // account that is *not* also overwritten by a post-state, plus up to 3 extra ids.
+    // account that carries no effects of its own, plus up to 3 extra ids.
     let mut public_account_ids: Vec<AccountId> = Vec::new();
     if bool::arbitrary(u)? {
         public_account_ids.extend_from_slice(&signer_ids);
@@ -274,7 +316,7 @@ pub fn arb_privacy_preserving_tx(
     let n_extra = (u8::arbitrary(u)? as usize) % 4;
     for _ in 0..n_extra {
         let id = if !accounts.is_empty() && bool::arbitrary(u)? {
-            // a known fuzz account — its post-state change is observable in the snapshot
+            // a known fuzz account — its effects are observable in the snapshot
             accounts[(u8::arbitrary(u)? as usize) % accounts.len()].account_id
         } else {
             AccountId::new(<[u8; 32]>::arbitrary(u)?)
@@ -288,7 +330,7 @@ pub fn arb_privacy_preserving_tx(
         .map(|account_id| {
             Ok(PublicActionWithID {
                 account_id,
-                post_state: arb_account(u)?,
+                effects: arb_public_effects(u)?,
             })
         })
         .collect::<ArbResult<Vec<_>>>()?;
@@ -318,6 +360,7 @@ pub fn arb_privacy_preserving_tx(
         private_actions,
         block_validity_window: arb_validity_window(u)?,
         timestamp_validity_window: arb_validity_window(u)?,
+        program_image_claims: Vec::new(),
     };
 
     // Mostly a passing proof (so checks 5–6 + apply are reached); occasionally garbage so
@@ -359,6 +402,7 @@ fn build_pure_private_tx(
         private_actions,
         block_validity_window: ValidityWindow::new_unbounded(),
         timestamp_validity_window: ValidityWindow::new_unbounded(),
+        program_image_claims: Vec::new(),
     };
     let proof = synthesize_passing_proof(&message, state, &[signer_id]);
     let witness_set = PPWitnessSet::for_message(&message, proof, &[key]);

@@ -6,7 +6,7 @@
 [Logos Execution Zone (LEZ)](https://github.com/logos-blockchain/logos-execution-zone) protocol.**
 
 [![Rust](https://img.shields.io/badge/rust-nightly-orange?logo=rust)](rust-toolchain.toml)
-[![Fuzzing](https://img.shields.io/badge/libFuzzer%20%C2%B7%20AFL%2B%2B-23%20targets-blue)](#-fuzz-targets)
+[![Fuzzing](https://img.shields.io/badge/libFuzzer%20%C2%B7%20AFL%2B%2B-22%20targets-blue)](#-fuzz-targets)
 [![Mutation testing](https://img.shields.io/badge/cargo--mutants-enabled-green)](.github/workflows/mutants.yml)
 [![License](https://img.shields.io/badge/license-MIT-lightgrey)](LICENSE-MIT)
 
@@ -31,7 +31,7 @@ lez-fuzzing/
 │       └── generators.rs       # Arbitrary / proptest strategies
 ├── fuzz/                   # cargo-fuzz crate (own [workspace] sentinel)
 │   ├── Cargo.toml
-│   ├── fuzz_targets/       # 23 targets total — see table below
+│   ├── fuzz_targets/       # 22 targets total — see table below
 │   │   ├── _template.rs    # Template for `just new-target`
 │   │   └── fuzz_*.rs
 │   └── corpus/             # Curated seed inputs (one dir per target)
@@ -121,18 +121,17 @@ just fuzz-props
 | 9 | `fuzz_validate_execute_consistency` | `validate_on_state` / `execute_check_on_state` agreement + diff accuracy + BalanceConservation |
 | 10 | `fuzz_state_serialization` | `V03State` Borsh decode no-panic + StateSerializationRoundtrip idempotency + NullifierDeduplication (`NullifierSet` hand-written impl) |
 | 11 | `fuzz_witness_set_verification` | `WitnessSet::is_valid_for` no-panic + CorrectVerification (sign→verify) + MessageIsolation (witness set for msg A rejected on msg B) |
-| 12 | `fuzz_program_deployment_lifecycle` | `V03State::transition_from_program_deployment_transaction` no-panic + BalanceIsolation (deployment must not move tokens) + StateIsolationOnFailure |
-| 13 | `fuzz_apply_state_diff_split_path` | SplitPathEquivalence: `validate_on_state + apply_state_diff` == `execute_check_on_state` for all known accounts (balance, nonce, data, program_owner); NonceIncrementCorrectness |
-| 14 | `fuzz_multi_block_state_sequence` | LongRangeBalanceConservation across up to 16 blocks + FailedTxNonceStability (nonce must not change on rejection) + PerBlockReplayRejection |
-| 15 | `fuzz_sequencer_vs_replayer` | Differential: sequencer path (`validate_on_state` → `apply_state_diff`) vs replayer path (`execute_check_on_state`) — SequencerReplayerEquivalence + ReplayerAcceptsAllSequencerTxs + ClockConsistency |
-| 16 | `fuzz_merkle_tree` | Commitment Merkle tree via the commitment set: ProofSome · ProofValid (leaf + auth path recomputes the root) · NonMembershipNone · IndicesSequential |
-| 17 | `fuzz_transaction_properties` | Transaction property invariants: HashDeterministic/HashNonDefault, SignerIds derived from witness keys & non-empty, AffectedAccountsContainSigners, PublicDiffNonEmptyOnSuccess |
-| 18 | `fuzz_privacy_preserving_witness` | `privacy_preserving_transaction::WitnessSet`: CorrectVerification (witness for msg A passes `signatures_are_valid_for(A)`) + MessageIsolation + SignerIdsMatchWitnessKeys |
-| 19 | `fuzz_encoding_privacy_preserving` | Privacy-preserving encoding: MessageEncodingRoundtrip + TxEncodingDeterministic/NonEmpty |
-| 20 | `fuzz_nullifier_set_roundtrip` | `NullifierSet` Borsh serialisation: NullifierSetRoundtrip (decode→encode identity for the hand-written impl) |
-| 21 | `fuzz_privacy_preserving_state_transition` | Path B — `NSSATransaction::PrivacyPreserving` through `execute_check_on_state` with a dev-mode passing proof: reaches commitment/nullifier checks 5–6 + `apply_state_diff`. Asserts no-panic, StateIsolationOnFailure, PrivateStateIsolationOnFailure, CommitmentInsertion, NonceIncrementCorrectness, PostStateApplied, ReplayRejection (balance conservation intentionally not asserted — the fake proof bypasses the circuit guarantee) |
-| 22 | `fuzz_transaction_ordering_independence` | Transaction ordering-independence on the shielded path: builds a *nullifier-conflicting* pair (two distinct privacy-preserving txs declaring the same nullifier) and applies it in both orders on independent clones of a seeded state, at an identical `(block_id, timestamp)`. Asserts **NoDoubleSpend** (neither ordering accepts both — the shared nullifier is spendable at most once) and **OrderIndependentAcceptance** (the count of accepted txs is the same in both orderings). The nullifier check is enforced by the state machine, not the circuit, so the dev-mode fake proof does not mask it. Requires `RISC0_DEV_MODE=1` |
-| 23 | `fuzz_stateful_model_lockstep` | Model-based stateful lockstep: steps an independent hand-written reference model of `(balance, nonce)` per account — reimplementing native-transfer semantics without calling `nssa` — in lockstep with the real `V03State` over a generated schedule of `Transfer`/`AdvanceBlock`/`ReplayLast` commands. Asserts **ModelAcceptanceAgreement** (real accept iff model predicts accept) and **ModelStateAgreement** (every account's real balance & nonce equals the model) after *every* command. The only target with a predictive oracle that pins the exact expected outcome per operation, catching history-dependent acceptance/state drift a self-consistent-but-wrong machine would pass |
+| 12 | `fuzz_apply_state_diff_split_path` | SplitPathEquivalence: `validate_on_state + apply_state_diff` == `execute_check_on_state` for all known accounts (balance, nonce, data, program_owner); NonceIncrementCorrectness |
+| 13 | `fuzz_multi_block_state_sequence` | LongRangeBalanceConservation across up to 16 blocks + FailedTxNonceStability (nonce must not change on rejection) + PerBlockReplayRejection |
+| 14 | `fuzz_sequencer_vs_replayer` | Differential: sequencer path (`validate_on_state` → `apply_state_diff`) vs replayer path (`execute_check_on_state`) — SequencerReplayerEquivalence + ReplayerAcceptsAllSequencerTxs + ClockConsistency |
+| 15 | `fuzz_merkle_tree` | Commitment Merkle tree via the commitment set: ProofSome · ProofValid (leaf + auth path recomputes the root) · NonMembershipNone · IndicesSequential |
+| 16 | `fuzz_transaction_properties` | Transaction property invariants: HashDeterministic/HashNonDefault, SignerIds derived from witness keys & non-empty, AffectedAccountsContainSigners, PublicDiffNonEmptyOnSuccess |
+| 17 | `fuzz_privacy_preserving_witness` | `privacy_preserving_transaction::WitnessSet`: CorrectVerification (witness for msg A passes `signatures_are_valid_for(A)`) + MessageIsolation + SignerIdsMatchWitnessKeys |
+| 18 | `fuzz_encoding_privacy_preserving` | Privacy-preserving encoding: MessageEncodingRoundtrip + TxEncodingDeterministic/NonEmpty |
+| 19 | `fuzz_nullifier_set_roundtrip` | `NullifierSet` Borsh serialisation: NullifierSetRoundtrip (decode→encode identity for the hand-written impl) |
+| 20 | `fuzz_privacy_preserving_state_transition` | Path B — `NSSATransaction::PrivacyPreserving` through `execute_check_on_state` with a dev-mode passing proof: reaches commitment/nullifier checks 5–6 + `apply_state_diff`. Asserts no-panic, StateIsolationOnFailure, PrivateStateIsolationOnFailure, CommitmentInsertion, NonceIncrementCorrectness, PostStateApplied, ReplayRejection (balance conservation intentionally not asserted — the fake proof bypasses the circuit guarantee) |
+| 21 | `fuzz_transaction_ordering_independence` | Transaction ordering-independence on the shielded path: builds a *nullifier-conflicting* pair (two distinct privacy-preserving txs declaring the same nullifier) and applies it in both orders on independent clones of a seeded state, at an identical `(block_id, timestamp)`. Asserts **NoDoubleSpend** (neither ordering accepts both — the shared nullifier is spendable at most once) and **OrderIndependentAcceptance** (the count of accepted txs is the same in both orderings). The nullifier check is enforced by the state machine, not the circuit, so the dev-mode fake proof does not mask it. Requires `RISC0_DEV_MODE=1` |
+| 22 | `fuzz_stateful_model_lockstep` | Model-based stateful lockstep: steps an independent hand-written reference model of `(balance, nonce)` per account — reimplementing native-transfer semantics without calling `nssa` — in lockstep with the real `V03State` over a generated schedule of `Transfer`/`AdvanceBlock`/`ReplayLast` commands. Asserts **ModelAcceptanceAgreement** (real accept iff model predicts accept) and **ModelStateAgreement** (every account's real balance & nonce equals the model) after *every* command. The only target with a predictive oracle that pins the exact expected outcome per operation, catching history-dependent acceptance/state drift a self-consistent-but-wrong machine would pass |
 
 Each target lives at `fuzz/fuzz_targets/<name>.rs`.
 

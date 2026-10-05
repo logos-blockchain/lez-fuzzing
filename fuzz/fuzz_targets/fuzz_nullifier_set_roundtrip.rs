@@ -18,7 +18,6 @@
 
 use nssa::{Account, AccountId, V03State};
 use nssa_core::{Commitment, Nullifier};
-use system_accounts::faucet_account_id;
 
 fuzz_props::fuzz_entry!(|data: &[u8]| {
     // ── Part 1: State with nullifiers — Borsh round-trip ─────────────────────
@@ -39,7 +38,7 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
 
         // Build a state that holds two nullifiers in its private state.
         let state = fuzz_props::genesis::genesis_state(
-            &[(faucet_account_id(), 0)],
+            &[(AccountId::new([0x33_u8; 32]), 0)],
             vec![(comm1, null1), (comm2, null2)],
         );
 

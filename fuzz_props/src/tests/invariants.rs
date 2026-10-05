@@ -3,6 +3,7 @@ use crate::invariants::{
     BalanceConservation, BalanceSnapshot, FailedTxNonceStability, InvariantCtx, NonceSnapshot,
     ProtocolInvariant, StateIsolationOnFailure, assert_invariants,
     assert_nonce_increment_correctness, assert_replay_rejection, assert_tx_execution_invariants,
+    native_balance,
 };
 use common::transaction::LeeTransaction;
 use nssa::V03State;
@@ -300,5 +301,24 @@ fn assert_tx_execution_invariants_is_not_noop() {
         result.is_err(),
         "assert_tx_execution_invariants must panic on a StateIsolationOnFailure violation \
          (mutation: replace entire function body with () \u{2014} no-op skips all invariant checks)"
+    );
+}
+
+/// `native_balance` must read the balance genesis stored in the account's native-token
+/// shard, and report zero for an account that holds none. A stubbed constant would make
+/// every balance snapshot (and so every conservation / isolation check) vacuous.
+#[test]
+fn native_balance_reads_the_native_token_shard() {
+    let funded = nssa::AccountId::new([0x51_u8; 32]);
+    let also_funded = nssa::AccountId::new([0x52_u8; 32]);
+    let absent = nssa::AccountId::new([0x53_u8; 32]);
+    let state = crate::genesis::genesis_state(&[(funded, 12_345), (also_funded, 7)], vec![]);
+
+    assert_eq!(native_balance(&state, funded), 12_345);
+    assert_eq!(native_balance(&state, also_funded), 7);
+    assert_eq!(
+        native_balance(&state, absent),
+        0,
+        "an account with no native-token shard has a zero balance"
     );
 }
