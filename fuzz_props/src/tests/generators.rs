@@ -111,6 +111,40 @@ fn fuzz_state_excludes_reserved_system_ids() {
     }
 }
 
+/// `reserved_account_ids` must name exactly the accounts `genesis_state` populates itself:
+/// the bridge, the sequencer-stake config, the three clock accounts and the three fee
+/// accounts. An empty or defaulted list would silently disable the exclusion above and let
+/// a generated account be overwritten at genesis.
+#[test]
+fn reserved_account_ids_match_genesis_system_accounts() {
+    let reserved = crate::genesis::reserved_account_ids();
+
+    assert!(
+        reserved.contains(&system_accounts::bridge_account_id()),
+        "reserved ids must include the bridge account (it holds u128::MAX at genesis)"
+    );
+    assert!(
+        reserved.contains(&system_accounts::sequencer_stake_config_account_id()),
+        "reserved ids must include the sequencer-stake config account"
+    );
+    for id in system_accounts::clock_account_ids() {
+        assert!(reserved.contains(&id), "reserved ids must include clock account {id:?}");
+    }
+    for id in system_accounts::fee_account_ids() {
+        assert!(reserved.contains(&id), "reserved ids must include fee account {id:?}");
+    }
+    assert_eq!(reserved.len(), 8, "reserved ids must contain no extra entries");
+
+    // Every reserved id is one genesis actually populates.
+    let state = crate::genesis::genesis_state(&[], vec![]);
+    for id in &reserved {
+        assert!(
+            state.get_account_by_id_ref(*id).is_some(),
+            "reserved id {id:?} is not populated by genesis_state"
+        );
+    }
+}
+
 #[test]
 fn fuzz_state_dedups_account_ids() {
     // All-identical bytes make every drawn account ID identical; genesis stores
