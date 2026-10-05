@@ -659,17 +659,17 @@ fn arb_public_effects_count_uses_modulo_3() {
     // Selector bytes of 1 keep every effect on the cheap native path.
     let mut buf = vec![1_u8; 256];
     buf[0] = 5;
-    let effects = arb_public_effects(&mut Unstructured::new(&buf)).expect("never errors");
+    let two_effects = arb_public_effects(&mut Unstructured::new(&buf)).expect("never errors");
     assert_eq!(
-        effects.len(),
+        two_effects.len(),
         2,
         "count byte 5 must yield 5 % 3 = 2 effects"
     );
 
     buf[0] = 255;
-    let effects = arb_public_effects(&mut Unstructured::new(&buf)).expect("never errors");
+    let no_effects = arb_public_effects(&mut Unstructured::new(&buf)).expect("never errors");
     assert!(
-        effects.is_empty(),
+        no_effects.is_empty(),
         "count byte 255 must yield 255 % 3 = 0 effects"
     );
 }
