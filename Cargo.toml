@@ -61,7 +61,6 @@ key_protocol          = { path = "../logos-execution-zone/lee/key_protocol" }
 testnet_initial_state = { path = "../logos-execution-zone/lez/testnet_initial_state" }
 programs              = { path = "../logos-execution-zone/lez/programs" }
 system_accounts       = { path = "../logos-execution-zone/lez/system_accounts" }
-token_core            = { path = "../logos-execution-zone/lez/programs/token/core" }
 test_program_methods  = { path = "../logos-execution-zone/test_programs", package = "test_programs" }
 
 # ── Third-party dependencies (versions mirrored from logos-execution-zone) ────

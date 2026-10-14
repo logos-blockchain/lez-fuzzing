@@ -21,9 +21,6 @@
 use arbitrary::{Arbitrary, Unstructured};
 use common::block::HashableBlockData;
 use fuzz_props::arbitrary_types::ArbHashableBlockData;
-use nssa::PrivateKey;
-
-const DUMMY_KEY_BYTES: [u8; 32] = [1u8; 32];
 
 fuzz_props::fuzz_entry!(|data: &[u8]| {
     let mut u = Unstructured::new(data);
@@ -32,27 +29,22 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
     };
     let base = wrap.0;
 
-    let signing_key = PrivateKey::try_new(DUMMY_KEY_BYTES).expect("constant key is valid");
-
     // Compute the canonical hash for the base input.
-    let block = base.clone().into_pending_block(&signing_key);
+    let block = base.clone().into_pending_block();
     let hash_base = block.header.hash;
 
     // ── INVARIANT 1: HashableBlockData::from(Block) is lossless ──────────────────
     //
     // For blocks produced by `into_pending_block`, `header.hash` is the hash computed
     // from the block's semantic fields.  Converting back via `From<Block>` strips the
-    // header (computed hash, signature) and retains only the payload.  Re-deriving the
+    // header (computed hash) and retains only the payload.  Re-deriving the
     // hash from the round-tripped value must reproduce the original hash.
     //
     // This is the hash-integrity check the old target deliberately skipped for adversarial
     // inputs.  For *programmatically-constructed* blocks it is fully assertable.
     {
         let roundtrip_hashable = HashableBlockData::from(block);
-        let hash_roundtrip = roundtrip_hashable
-            .into_pending_block(&signing_key)
-            .header
-            .hash;
+        let hash_roundtrip = roundtrip_hashable.into_pending_block().header.hash;
         assert_eq!(
             hash_base,
             hash_roundtrip,
@@ -66,7 +58,7 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
     {
         let mut m = base.clone();
         m.block_id = m.block_id.wrapping_add(1);
-        let hash_m = m.into_pending_block(&signing_key).header.hash;
+        let hash_m = m.into_pending_block().header.hash;
         assert_ne!(
             hash_base,
             hash_m,
@@ -80,7 +72,7 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
     {
         let mut m = base.clone();
         m.prev_block_hash.0[0] ^= 0xFF;
-        let hash_m = m.into_pending_block(&signing_key).header.hash;
+        let hash_m = m.into_pending_block().header.hash;
         assert_ne!(
             hash_base,
             hash_m,
@@ -94,7 +86,7 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
     {
         let mut m = base.clone();
         m.timestamp = m.timestamp.wrapping_add(1);
-        let hash_m = m.into_pending_block(&signing_key).header.hash;
+        let hash_m = m.into_pending_block().header.hash;
         assert_ne!(
             hash_base,
             hash_m,
@@ -120,7 +112,7 @@ fuzz_props::fuzz_entry!(|data: &[u8]| {
         if first != last {
             let mut reordered = base.clone();
             reordered.transactions.reverse();
-            let hash_reordered = reordered.into_pending_block(&signing_key).header.hash;
+            let hash_reordered = reordered.into_pending_block().header.hash;
             assert_ne!(
                 hash_base,
                 hash_reordered,
