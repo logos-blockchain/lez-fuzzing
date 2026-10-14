@@ -12,7 +12,7 @@ use nssa_core::{Commitment, Nullifier};
 ///
 /// Mirrors `testnet_initial_state::initial_state(false)` with fuzz-supplied user accounts:
 /// every public account holds its balance in the native-token shard, the bridge/clock/
-/// sequencer-stake/fee system accounts are present, and the seven non-cross-zone builtin
+/// sequencer-stake/fee system accounts are present, and the four non-cross-zone builtin
 /// programs are registered at their name-derived addresses. The genesis timestamp is fixed
 /// at 0, matching `system_accounts::clock_account()`'s default.
 #[must_use]
@@ -49,11 +49,8 @@ pub fn genesis_state(
         .with_public_accounts(public_accounts)
         .with_private_accounts(private_accounts)
         .with_named_programs([
-            (programs::token_account_id(), programs::token()),
-            (programs::amm_account_id(), programs::amm()),
             (programs::clock_account_id(), programs::clock()),
             (programs::fee_account_id(), programs::fee()),
-            (programs::ata_account_id(), programs::ata()),
             (programs::bridge_account_id(), programs::bridge()),
             (
                 programs::sequencer_stake_account_id(),
